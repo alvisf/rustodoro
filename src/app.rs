@@ -82,6 +82,7 @@ pub struct App {
     pub current_task: String,
     pub task_input_buffer: String,
     phase_start_wall: String,
+    overtime_notified: bool,
 }
 
 impl App {
@@ -139,6 +140,7 @@ impl App {
             current_task: String::new(),
             task_input_buffer: String::new(),
             phase_start_wall: String::new(),
+            overtime_notified: false,
         }
     }
 
@@ -215,6 +217,7 @@ impl App {
         self.pause_start = None;
         self.paused = false;
         self.phase_start_wall = store::local_time_str();
+        self.overtime_notified = false;
     }
 
     // -- Timer --
@@ -269,6 +272,13 @@ impl App {
         if !self.paused && self.remaining_secs() == 0 && self.phase != Phase::Work {
             self.finish_phase(Outcome::Completed);
         }
+
+        if self.persist && self.phase == Phase::Work
+            && self.is_overtime() && !self.overtime_notified
+        {
+            self.overtime_notified = true;
+            store::send_notification("⏰ Time's up!", "Take a break when you're ready");
+        }
     }
 
     pub fn toggle_pause(&mut self) {
@@ -318,6 +328,27 @@ impl App {
         if breaks_to_skip == 0 {
             self.advance_phase();
             self.reset_timer();
+            if self.persist {
+                let msg = match self.phase {
+                    Phase::LongBreak => format!(
+                        "Great work! Relax for {} min",
+                        self.long_break_secs / 60,
+                    ),
+                    Phase::Break => format!(
+                        "Relax for {} min",
+                        self.break_secs / 60,
+                    ),
+                    _ => String::new(),
+                };
+                let title = match self.phase {
+                    Phase::LongBreak => "🌴 Long break!",
+                    Phase::Break => "☕ Break time!",
+                    _ => "",
+                };
+                if !title.is_empty() {
+                    store::send_notification(title, &msg);
+                }
+            }
         } else {
             self.session += breaks_to_skip;
             self.reset_timer();
@@ -332,6 +363,7 @@ impl App {
         let elapsed = self.elapsed_secs();
         let total = self.phase_total_secs();
         let end_wall = store::local_time_str();
+        let prev_phase = self.phase;
 
         if self.phase == Phase::Work && elapsed > 0 {
             self.record_work(elapsed, &end_wall, outcome);
@@ -356,6 +388,24 @@ impl App {
 
         self.advance_phase();
         self.reset_timer();
+
+        if self.persist {
+            match (prev_phase, self.phase) {
+                (Phase::Break | Phase::LongBreak, Phase::Work) => {
+                    store::send_notification(
+                        "🍅 Break's over!",
+                        "Time to get back to work",
+                    );
+                }
+                (Phase::Work, Phase::Break) => {
+                    store::send_notification("☕ Break time!", &format!("Relax for {} min", self.break_secs / 60));
+                }
+                (Phase::Work, Phase::LongBreak) => {
+                    store::send_notification("🌴 Long break!", &format!("Great work! Relax for {} min", self.long_break_secs / 60));
+                }
+                _ => {}
+            }
+        }
 
         if self.phase == Phase::Work && self.screen == Screen::Timer {
             self.task_input_buffer.clear();

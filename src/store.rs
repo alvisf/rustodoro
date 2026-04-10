@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::BufRead;
 use std::io::{self, Write};
+use std::process::{Command, Stdio};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -173,6 +174,21 @@ pub fn save_config(work_secs: u64, break_secs: u64, long_break_secs: u64, sessio
     fs::create_dir_all(&dir)?;
     let contents = format!("work_secs={work_secs}\nbreak_secs={break_secs}\nlong_break_secs={long_break_secs}\nsessions_before_long={sessions_before_long}\n");
     fs::write(config_path(), contents)
+}
+
+pub fn send_notification(title: &str, message: &str) {
+    Command::new("terminal-notifier")
+        .args([
+            "-title", title,
+            "-message", message,
+            "-appIcon", "/Users/alvisf/Documents/pomodoro_timer_icon.png",
+            "-sound", "default",
+            "-group", "pomodoro",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok();
 }
 
 pub fn load_daily_stats() -> BTreeMap<String, DayStats> {
