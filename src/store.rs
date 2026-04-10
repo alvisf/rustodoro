@@ -80,6 +80,22 @@ fn format_mmss(secs: u64) -> String {
     format!("{m:02}:{s:02}")
 }
 
+fn quarter_for_month(month: u32) -> u32 {
+    (month - 1) / 3 + 1
+}
+
+fn quarterly_filename(date: &str) -> String {
+    let month: u32 = date[5..7].parse().unwrap_or(1);
+    let year = &date[0..4];
+    format!("{year}-Q{}.md", quarter_for_month(month))
+}
+
+fn quarterly_title(date: &str) -> String {
+    let month: u32 = date[5..7].parse().unwrap_or(1);
+    let year = &date[0..4];
+    format!("{year} Q{}", quarter_for_month(month))
+}
+
 pub fn save_work_entry_md(
     date: &str,
     start_time: &str,
@@ -91,8 +107,16 @@ pub fn save_work_entry_md(
     let dir = log_dir();
     fs::create_dir_all(&dir)?;
 
-    let path = dir.join(format!("{date}.md"));
+    let path = dir.join(quarterly_filename(date));
     let is_new = !path.exists();
+
+    let date_header = format!("## {date}");
+    let needs_date_header = if is_new {
+        true
+    } else {
+        let contents = fs::read_to_string(&path).unwrap_or_default();
+        !contents.contains(&date_header)
+    };
 
     let mut file = OpenOptions::new()
         .create(true)
@@ -100,7 +124,11 @@ pub fn save_work_entry_md(
         .open(&path)?;
 
     if is_new {
-        writeln!(file, "# {date}\n")?;
+        writeln!(file, "# {}\n", quarterly_title(date))?;
+    }
+
+    if needs_date_header {
+        writeln!(file, "\n{date_header}\n")?;
     }
 
     let icon = if completed { "✅" } else { "⏭" };
@@ -169,10 +197,18 @@ pub fn load_config() -> Config {
     cfg
 }
 
-pub fn save_config(work_secs: u64, break_secs: u64, long_break_secs: u64, sessions_before_long: u32) -> io::Result<()> {
+pub fn save_config(
+    work_secs: u64,
+    break_secs: u64,
+    long_break_secs: u64,
+    sessions_before_long: u32,
+) -> io::Result<()> {
     let dir = log_dir();
     fs::create_dir_all(&dir)?;
-    let contents = format!("work_secs={work_secs}\nbreak_secs={break_secs}\nlong_break_secs={long_break_secs}\nsessions_before_long={sessions_before_long}\n");
+    let contents = format!(
+        "work_secs={work_secs}\nbreak_secs={break_secs}\n\
+         long_break_secs={long_break_secs}\nsessions_before_long={sessions_before_long}\n"
+    );
     fs::write(config_path(), contents)
 }
 
@@ -210,31 +246,65 @@ pub fn load_daily_stats() -> BTreeMap<String, DayStats> {
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        if stem.len() != 10
-            || stem.as_bytes()[4] != b'-'
-            || stem.as_bytes()[7] != b'-'
-        {
-            continue;
-        }
         let Ok(contents) = fs::read_to_string(&path) else {
             continue;
         };
 
-        let mut day = DayStats::default();
-        for line in contents.lines() {
-            if let Some(stripped) = line.strip_prefix("- ")
-                && let Some(secs) = parse_entry_duration(stripped) {
-                day.work_secs += secs;
-                day.sessions += 1;
-            }
-        }
-
-        if day.sessions > 0 {
-            stats.insert(stem.to_string(), day);
+        if is_quarterly_filename(stem) {
+            parse_quarterly_file(&contents, &mut stats);
+        } else if is_daily_filename(stem) {
+            parse_daily_file(stem, &contents, &mut stats);
         }
     }
 
     stats
+}
+
+fn is_quarterly_filename(stem: &str) -> bool {
+    stem.len() == 7
+        && stem.as_bytes()[4] == b'-'
+        && stem.as_bytes()[5] == b'Q'
+        && matches!(stem.as_bytes()[6], b'1'..=b'4')
+}
+
+fn is_daily_filename(stem: &str) -> bool {
+    stem.len() == 10
+        && stem.as_bytes()[4] == b'-'
+        && stem.as_bytes()[7] == b'-'
+}
+
+fn parse_quarterly_file(contents: &str, stats: &mut BTreeMap<String, DayStats>) {
+    let mut current_date: Option<String> = None;
+    for line in contents.lines() {
+        if let Some(date) = line.strip_prefix("## ") {
+            let date = date.trim();
+            if is_daily_filename(date) {
+                current_date = Some(date.to_string());
+            }
+        } else if let Some(stripped) = line.strip_prefix("- ")
+            && let Some(secs) = parse_entry_duration(stripped)
+            && let Some(date) = &current_date
+        {
+            let day = stats.entry(date.clone()).or_default();
+            day.work_secs += secs;
+            day.sessions += 1;
+        }
+    }
+}
+
+fn parse_daily_file(date: &str, contents: &str, stats: &mut BTreeMap<String, DayStats>) {
+    let mut day = DayStats::default();
+    for line in contents.lines() {
+        if let Some(stripped) = line.strip_prefix("- ")
+            && let Some(secs) = parse_entry_duration(stripped)
+        {
+            day.work_secs += secs;
+            day.sessions += 1;
+        }
+    }
+    if day.sessions > 0 {
+        stats.insert(date.to_string(), day);
+    }
 }
 
 fn parse_entry_duration(line: &str) -> Option<u64> {
@@ -304,5 +374,77 @@ mod tests {
             Some(330)
         );
         assert_eq!(parse_entry_duration("no parens here"), None);
+    }
+
+    #[test]
+    fn test_quarterly_filename() {
+        assert_eq!(quarterly_filename("2026-01-15"), "2026-Q1.md");
+        assert_eq!(quarterly_filename("2026-03-31"), "2026-Q1.md");
+        assert_eq!(quarterly_filename("2026-04-01"), "2026-Q2.md");
+        assert_eq!(quarterly_filename("2026-06-30"), "2026-Q2.md");
+        assert_eq!(quarterly_filename("2026-07-01"), "2026-Q3.md");
+        assert_eq!(quarterly_filename("2026-10-01"), "2026-Q4.md");
+        assert_eq!(quarterly_filename("2026-12-31"), "2026-Q4.md");
+    }
+
+    #[test]
+    fn test_quarterly_title() {
+        assert_eq!(quarterly_title("2026-04-09"), "2026 Q2");
+        assert_eq!(quarterly_title("2026-01-01"), "2026 Q1");
+    }
+
+    #[test]
+    fn test_is_quarterly_filename() {
+        assert!(is_quarterly_filename("2026-Q1"));
+        assert!(is_quarterly_filename("2026-Q4"));
+        assert!(!is_quarterly_filename("2026-Q5"));
+        assert!(!is_quarterly_filename("2026-Q0"));
+        assert!(!is_quarterly_filename("2026-04-09"));
+        assert!(!is_quarterly_filename("short"));
+    }
+
+    #[test]
+    fn test_is_daily_filename() {
+        assert!(is_daily_filename("2026-04-09"));
+        assert!(!is_daily_filename("2026-Q1"));
+        assert!(!is_daily_filename("short"));
+    }
+
+    #[test]
+    fn test_parse_quarterly_file() {
+        let contents = "\
+# 2026 Q2
+
+## 2026-04-09
+
+- 09:15 – 09:40 (25:00) ✅ task1
+- 09:45 – 10:10 (25:00) ✅ task2
+
+## 2026-04-10
+
+- 08:30 – 09:00 (30:00) ✅ task3
+";
+        let mut stats = BTreeMap::new();
+        parse_quarterly_file(contents, &mut stats);
+        assert_eq!(stats.len(), 2);
+        assert_eq!(stats["2026-04-09"].sessions, 2);
+        assert_eq!(stats["2026-04-09"].work_secs, 3000);
+        assert_eq!(stats["2026-04-10"].sessions, 1);
+        assert_eq!(stats["2026-04-10"].work_secs, 1800);
+    }
+
+    #[test]
+    fn test_parse_daily_file() {
+        let contents = "\
+# 2026-04-09
+
+- 09:15 – 09:40 (25:00) ✅ task1
+- 09:45 – 10:10 (10:00) ⏭ task2
+";
+        let mut stats = BTreeMap::new();
+        parse_daily_file("2026-04-09", contents, &mut stats);
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats["2026-04-09"].sessions, 2);
+        assert_eq!(stats["2026-04-09"].work_secs, 2100);
     }
 }

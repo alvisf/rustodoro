@@ -531,10 +531,10 @@ mod tests {
 
     #[test]
     fn test_new_app_defaults() {
-        let app = App::new();
-        assert_eq!(app.work_secs, 1500);
-        assert_eq!(app.break_secs, 300);
-        assert_eq!(app.long_break_secs, 900);
+        let app = App::with_config(25, 5, 15, 4);
+        assert_eq!(app.work_secs, 25 * 60);
+        assert_eq!(app.break_secs, 5 * 60);
+        assert_eq!(app.long_break_secs, 15 * 60);
         assert_eq!(app.sessions_before_long, 4);
         assert_eq!(app.session, 1);
         assert_eq!(app.phase, Phase::Work);
@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn test_increment_work() {
-        let mut app = App::new();
+        let mut app = App::with_config(25, 5, 15, 4);
         app.selected_field = 0;
         assert_eq!(app.work_secs, 25 * 60);
         app.increment_field();
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn test_start_timer_goes_to_task_input() {
-        let mut app = App::new();
+        let mut app = App::with_config(25, 5, 15, 4);
         assert_eq!(app.screen, Screen::Setup);
         app.start_timer();
         assert_eq!(app.screen, Screen::TaskInput);
@@ -647,7 +647,7 @@ mod tests {
 
     #[test]
     fn test_phase_total_secs() {
-        let app = App::new();
+        let app = App::with_config(25, 5, 15, 4);
         assert_eq!(app.phase_total_secs(), 1500);
     }
 
@@ -670,7 +670,7 @@ mod tests {
 
     #[test]
     fn test_skip_advances_phase() {
-        let mut app = App::new();
+        let mut app = App::with_config(25, 5, 15, 4);
         app.skip_phase();
         assert_eq!(app.phase, Phase::Break);
         assert_eq!(app.session, 1);
@@ -700,7 +700,7 @@ mod tests {
 
     #[test]
     fn test_history_tracking() {
-        let mut app = App::new();
+        let mut app = App::with_config(25, 5, 15, 4);
         app.current_task = "Test task".to_string();
         app.skip_phase();
 
@@ -713,7 +713,7 @@ mod tests {
 
     #[test]
     fn test_toggle_pause() {
-        let mut app = App::new();
+        let mut app = App::with_config(25, 5, 15, 4);
         assert!(!app.paused);
         app.toggle_pause();
         assert!(app.paused);
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn test_sessions_in_cycle() {
-        let mut app = App::new();
+        let mut app = App::with_config(25, 5, 15, 4);
         assert_eq!(app.sessions_in_cycle(), 1);
 
         app.skip_phase(); // Work -> Break
