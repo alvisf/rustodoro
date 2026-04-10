@@ -82,6 +82,7 @@ pub struct App {
     pub current_task: String,
     pub task_input_buffer: String,
     phase_start_wall: String,
+    phase_start_wall_12h: String,
     overtime_notified: bool,
 }
 
@@ -140,6 +141,7 @@ impl App {
             current_task: String::new(),
             task_input_buffer: String::new(),
             phase_start_wall: String::new(),
+            phase_start_wall_12h: String::new(),
             overtime_notified: false,
         }
     }
@@ -217,6 +219,7 @@ impl App {
         self.pause_start = None;
         self.paused = false;
         self.phase_start_wall = store::local_time_str();
+        self.phase_start_wall_12h = store::local_time_12h();
         self.overtime_notified = false;
     }
 
@@ -305,10 +308,11 @@ impl App {
         let elapsed = self.elapsed_secs();
         let total = self.phase_total_secs();
         let end_wall = store::local_time_str();
+        let end_wall_12h = store::local_time_12h();
         let overtime = elapsed.saturating_sub(total);
 
         if elapsed > 0 {
-            self.record_work(elapsed, &end_wall, Outcome::Completed);
+            self.record_work(elapsed, &end_wall_12h, Outcome::Completed);
         }
 
         self.history.push(HistoryEntry {
@@ -363,10 +367,11 @@ impl App {
         let elapsed = self.elapsed_secs();
         let total = self.phase_total_secs();
         let end_wall = store::local_time_str();
+        let end_wall_12h = store::local_time_12h();
         let prev_phase = self.phase;
 
         if self.phase == Phase::Work && elapsed > 0 {
-            self.record_work(elapsed, &end_wall, outcome);
+            self.record_work(elapsed, &end_wall_12h, outcome);
         }
 
         let task = if self.phase == Phase::Work {
@@ -435,6 +440,7 @@ impl App {
         self.pause_start = None;
         self.paused = false;
         self.phase_start_wall = store::local_time_str();
+        self.phase_start_wall_12h = store::local_time_12h();
     }
 
     pub fn sessions_in_cycle(&self) -> u32 {
@@ -453,7 +459,7 @@ impl App {
         if self.persist {
             store::save_work_entry_md(
                 &today,
-                &self.phase_start_wall,
+                &self.phase_start_wall_12h,
                 end_wall,
                 secs,
                 &self.current_task,
@@ -472,8 +478,8 @@ impl App {
         {
             let elapsed = self.elapsed_secs();
             if elapsed > 0 {
-                let end_wall = store::local_time_str();
-                self.record_work(elapsed, &end_wall, Outcome::Skipped);
+                let end_wall_12h = store::local_time_12h();
+                self.record_work(elapsed, &end_wall_12h, Outcome::Skipped);
             }
         }
     }

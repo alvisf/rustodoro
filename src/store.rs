@@ -47,6 +47,16 @@ pub fn local_time_str() -> String {
     format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
 }
 
+pub fn local_time_12h() -> String {
+    let Some(tm) = local_tm(unix_now() as i64) else {
+        return "??:?? ??".to_string();
+    };
+    let hour = tm.tm_hour;
+    let suffix = if hour < 12 { "AM" } else { "PM" };
+    let h12 = if hour == 0 { 12 } else if hour > 12 { hour - 12 } else { hour };
+    format!("{h12}:{:02} {suffix}", tm.tm_min)
+}
+
 pub fn local_date_str() -> String {
     local_date_for_offset(0)
 }
@@ -131,13 +141,13 @@ pub fn save_work_entry_md(
         writeln!(file, "\n{date_header}\n")?;
     }
 
-    let icon = if completed { "✅" } else { "⏭" };
     let duration = format_mmss(duration_secs);
+    let mark = if completed { "[x]" } else { "[ ]" };
 
     if task.is_empty() {
-        writeln!(file, "- {start_time} – {end_time} ({duration}) {icon}")
+        writeln!(file, "- {mark} {start_time} – {end_time} ({duration})")
     } else {
-        writeln!(file, "- {start_time} – {end_time} ({duration}) {icon} {task}")
+        writeln!(file, "- {mark} {start_time} – {end_time} ({duration}) {task}")
     }
 }
 
@@ -364,15 +374,24 @@ mod tests {
     }
 
     #[test]
+    fn test_local_time_12h_format() {
+        let time = local_time_12h();
+        assert!(time.ends_with("AM") || time.ends_with("PM"));
+        assert!(time.contains(':'));
+    }
+
+    #[test]
     fn test_parse_entry_duration() {
         assert_eq!(
-            parse_entry_duration("09:15 – 09:40 (25:00) ✅ task"),
+            parse_entry_duration("[x] 09:15 – 09:40 (25:00) task"),
             Some(1500)
         );
         assert_eq!(
-            parse_entry_duration("10:00 – 10:05 (05:30) ⏭"),
+            parse_entry_duration("[ ] 10:00 – 10:05 (05:30)"),
             Some(330)
         );
+        // Old emoji format still parses
+        assert_eq!(parse_entry_duration("09:15 – 09:40 (25:00) ✅ task"), Some(1500));
         assert_eq!(parse_entry_duration("no parens here"), None);
     }
 
@@ -417,8 +436,8 @@ mod tests {
 
 ## 2026-04-09
 
-- 09:15 – 09:40 (25:00) ✅ task1
-- 09:45 – 10:10 (25:00) ✅ task2
+- [x] 09:15 – 09:40 (25:00) task1
+- [x] 09:45 – 10:10 (25:00) task2
 
 ## 2026-04-10
 
@@ -438,8 +457,8 @@ mod tests {
         let contents = "\
 # 2026-04-09
 
-- 09:15 – 09:40 (25:00) ✅ task1
-- 09:45 – 10:10 (10:00) ⏭ task2
+- [x] 09:15 – 09:40 (25:00) task1
+- [ ] 09:45 – 10:10 (10:00) task2
 ";
         let mut stats = BTreeMap::new();
         parse_daily_file("2026-04-09", contents, &mut stats);
