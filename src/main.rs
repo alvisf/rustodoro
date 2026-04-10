@@ -57,6 +57,7 @@ fn main() -> io::Result<()> {
                     KeyCode::Char(' ') => app.toggle_pause(),
                     KeyCode::Char('s') | KeyCode::Char('n') => app.skip_phase(),
                     KeyCode::Char('d') => app.screen = Screen::DailyLog,
+                    KeyCode::Enter => app.confirm_break(),
                     _ => {}
                 },
                 Screen::DailyLog => match code {

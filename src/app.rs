@@ -113,7 +113,12 @@ impl App {
         )
     }
 
-    fn with_config_secs(work_secs: u64, break_secs: u64, long_break_secs: u64, sessions_before_long: u32) -> Self {
+    fn with_config_secs(
+        work_secs: u64,
+        break_secs: u64,
+        long_break_secs: u64,
+        sessions_before_long: u32,
+    ) -> Self {
         Self {
             work_secs,
             break_secs,
@@ -228,15 +233,28 @@ impl App {
             .map(|ps| ps.elapsed())
             .unwrap_or(Duration::ZERO);
         let total_paused = self.pause_accumulated + pause_extra;
-        self.phase_start
+        let raw = self
+            .phase_start
             .elapsed()
             .saturating_sub(total_paused)
-            .as_secs()
-            .min(self.phase_total_secs())
+            .as_secs();
+        if self.phase == Phase::Work {
+            raw
+        } else {
+            raw.min(self.phase_total_secs())
+        }
     }
 
     pub fn remaining_secs(&self) -> u64 {
         self.phase_total_secs().saturating_sub(self.elapsed_secs())
+    }
+
+    pub fn overtime_secs(&self) -> u64 {
+        self.elapsed_secs().saturating_sub(self.phase_total_secs())
+    }
+
+    pub fn is_overtime(&self) -> bool {
+        self.phase == Phase::Work && self.elapsed_secs() >= self.phase_total_secs()
     }
 
     pub fn progress(&self) -> f64 {
@@ -248,7 +266,7 @@ impl App {
     }
 
     pub fn tick(&mut self) {
-        if !self.paused && self.remaining_secs() == 0 {
+        if !self.paused && self.remaining_secs() == 0 && self.phase != Phase::Work {
             self.finish_phase(Outcome::Completed);
         }
     }
@@ -267,6 +285,47 @@ impl App {
 
     pub fn skip_phase(&mut self) {
         self.finish_phase(Outcome::Skipped);
+    }
+
+    pub fn confirm_break(&mut self) {
+        if self.phase != Phase::Work {
+            return;
+        }
+
+        let elapsed = self.elapsed_secs();
+        let total = self.phase_total_secs();
+        let end_wall = store::local_time_str();
+        let overtime = elapsed.saturating_sub(total);
+
+        if elapsed > 0 {
+            self.record_work(elapsed, &end_wall, Outcome::Completed);
+        }
+
+        self.history.push(HistoryEntry {
+            session: self.session,
+            phase: Phase::Work,
+            elapsed_secs: elapsed,
+            total_secs: total,
+            outcome: Outcome::Completed,
+            task: self.current_task.clone(),
+            start_time: self.phase_start_wall.clone(),
+            end_time: end_wall,
+        });
+
+        let break_dur = self.break_secs.max(1);
+        let breaks_to_skip = (overtime / break_dur) as u32;
+
+        if breaks_to_skip == 0 {
+            self.advance_phase();
+            self.reset_timer();
+        } else {
+            self.session += breaks_to_skip;
+            self.reset_timer();
+            if self.screen == Screen::Timer {
+                self.task_input_buffer.clear();
+                self.screen = Screen::TaskInput;
+            }
+        }
     }
 
     fn finish_phase(&mut self, outcome: Outcome) {
@@ -543,6 +602,23 @@ mod tests {
     }
 
     #[test]
+    fn test_work_does_not_auto_complete() {
+        let mut app = App::with_config(0, 5, 15, 4);
+        app.tick(); // Work remaining=0, but tick should NOT auto-finish
+        assert_eq!(app.phase, Phase::Work);
+        assert!(app.history.is_empty());
+    }
+
+    #[test]
+    fn test_break_still_auto_completes() {
+        let mut app = App::with_config(25, 0, 15, 4);
+        app.skip_phase(); // Work -> Break (0 dur)
+        app.tick(); // Break remaining=0 -> auto-completes
+        assert_eq!(app.phase, Phase::Work);
+        assert_eq!(app.session, 2);
+    }
+
+    #[test]
     fn test_skip_advances_phase() {
         let mut app = App::new();
         app.skip_phase();
@@ -611,12 +687,47 @@ mod tests {
         assert_eq!(app.progress(), 1.0);
     }
 
+    // -- Overtime & confirm_break --
+
+    #[test]
+    fn test_is_overtime_zero_duration() {
+        let app = App::with_config(0, 5, 15, 4);
+        assert!(app.is_overtime());
+    }
+
+    #[test]
+    fn test_not_overtime_during_countdown() {
+        let app = App::with_config(25, 5, 15, 4);
+        assert!(!app.is_overtime());
+        assert_eq!(app.overtime_secs(), 0);
+    }
+
+    #[test]
+    fn test_confirm_break_goes_to_break() {
+        let mut app = App::with_config(0, 5, 15, 4);
+        app.confirm_break();
+        assert_eq!(app.phase, Phase::Break);
+        assert_eq!(app.session, 1);
+        assert_eq!(app.history.len(), 1);
+        assert_eq!(app.history[0].outcome, Outcome::Completed);
+    }
+
+    #[test]
+    fn test_confirm_break_noop_during_break() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.skip_phase(); // Work -> Break
+        let session = app.session;
+        app.confirm_break(); // Should do nothing
+        assert_eq!(app.phase, Phase::Break);
+        assert_eq!(app.session, session);
+    }
+
     #[test]
     fn test_completed_work_sessions() {
         let mut app = App::with_config(0, 0, 0, 4);
-        app.tick(); // Work completes -> Break
-        app.tick(); // Break completes -> Work (session 2)
-        app.tick(); // Work completes -> Break
+        app.confirm_break(); // Work -> Break
+        app.tick(); // Break (0 dur) completes -> Work
+        app.confirm_break(); // Work -> Break
         assert_eq!(app.completed_work_sessions(), 2);
     }
 }

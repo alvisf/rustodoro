@@ -148,12 +148,18 @@ fn draw_timer_screen(frame: &mut Frame, app: &App) {
     draw_stats(frame, chunks[1], app);
     draw_log(frame, chunks[2], app);
 
-    let pause_label = if app.paused { "resume" } else { "pause" };
-    draw_controls(frame, chunks[3], &[("space", pause_label), ("s", "skip"), ("d", "daily log"), ("q", "quit")]);
+    let pause_label: &str = if app.paused { "resume" } else { "pause" };
+    let mut bindings: Vec<(&str, &str)> = vec![("space", pause_label)];
+    if app.phase == Phase::Work {
+        bindings.push(("Enter", "break"));
+    }
+    bindings.extend([("s", "skip"), ("d", "daily log"), ("q", "quit")]);
+    draw_controls(frame, chunks[3], &bindings);
 }
 
 fn draw_timer(frame: &mut Frame, area: Rect, app: &App) {
-    let color = if app.paused {
+    let overtime = app.is_overtime();
+    let color = if app.paused || overtime {
         Color::Yellow
     } else {
         phase_color(app.phase)
@@ -178,7 +184,11 @@ fn draw_timer(frame: &mut Frame, area: Rect, app: &App) {
 
     let phase_label = format!("{} {}", app.phase.icon(), app.phase.label());
     let session_label = format!("Session #{}", app.session);
-    let time_str = format_duration(app.remaining_secs());
+    let time_str = if overtime {
+        format!("+{}", format_duration(app.overtime_secs()))
+    } else {
+        format_duration(app.remaining_secs())
+    };
 
     let task_line = if app.phase == Phase::Work && !app.current_task.is_empty() {
         Line::from(Span::styled(
@@ -189,9 +199,16 @@ fn draw_timer(frame: &mut Frame, area: Rect, app: &App) {
         Line::from("")
     };
 
-    let pause_line = if app.paused {
+    let status_line = if app.paused {
         Line::from(Span::styled(
             "⏸  PAUSED",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))
+    } else if overtime {
+        Line::from(Span::styled(
+            "⏰ Time's up! Press Enter for break",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
@@ -213,9 +230,9 @@ fn draw_timer(frame: &mut Frame, area: Rect, app: &App) {
         task_line,
         Line::from(Span::styled(
             time_str,
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
+            Style::default().fg(if overtime { Color::Yellow } else { color }).add_modifier(Modifier::BOLD),
         )),
-        pause_line,
+        status_line,
     ]);
 
     let para = Paragraph::new(text).alignment(Alignment::Center);
@@ -274,13 +291,19 @@ fn draw_stats(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
-    let color = if app.paused {
+    let overtime = app.is_overtime();
+    let color = if app.paused || overtime {
         Color::Yellow
     } else {
         phase_color(app.phase)
     };
-    let status = if app.paused { "paused" } else { "running" };
-    let icon = if app.paused { "⏸" } else { "▶" };
+    let (status, icon) = if app.paused {
+        ("paused", "⏸")
+    } else if overtime {
+        ("overtime", "⏰")
+    } else {
+        ("running", "▶")
+    };
 
     let mut spans = vec![
         Span::styled(format!("  {icon} "), Style::default().fg(color)),
@@ -292,11 +315,19 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
             format!("{:<11}", app.phase.label()),
             Style::default().fg(color),
         ),
-        Span::raw(format!(
-            "{} / {}  ",
-            format_duration(app.remaining_secs()),
-            format_duration(app.phase_total_secs()),
-        )),
+        Span::raw(if overtime {
+            format!(
+                "+{} / {}  ",
+                format_duration(app.overtime_secs()),
+                format_duration(app.phase_total_secs()),
+            )
+        } else {
+            format!(
+                "{} / {}  ",
+                format_duration(app.remaining_secs()),
+                format_duration(app.phase_total_secs()),
+            )
+        }),
         Span::styled(status, Style::default().fg(color)),
     ];
     if app.phase == Phase::Work && !app.current_task.is_empty() {
