@@ -308,7 +308,11 @@ fn draw_notes_input(frame: &mut Frame, app: &App) {
     }
 
     lines.push(Line::from(Span::styled(
-        "Any notes on this task?",
+        if app.pending_is_helping {
+            "Who/what were you helping with?"
+        } else {
+            "Any notes on this task?"
+        },
         Style::default()
             .fg(Color::White)
             .add_modifier(Modifier::BOLD),
@@ -349,6 +353,7 @@ fn draw_timer_screen(frame: &mut Frame, app: &App) {
     if app.phase == Phase::Work {
         bindings.push(("Enter", "break"));
         bindings.push(("e", "end task"));
+        bindings.push(("h", "helping"));
     }
     bindings.extend([
         ("s", "skip"),
@@ -454,25 +459,39 @@ fn draw_stats(frame: &mut Frame, area: Rect, app: &App) {
     let work_m = app.work_secs / 60;
     let break_m = app.break_secs / 60;
     let long_m = app.long_break_secs / 60;
-    let today_hours = store::format_hours(app.today_work_secs());
+    let today_helping = app.today_helping_secs();
+    let today_total = app.today_work_secs() + today_helping;
+    let today_hours = store::format_hours(today_total);
     let today_sessions = app.today_sessions();
     let cycle = format!("{}/{}", app.sessions_in_cycle(), app.sessions_before_long);
 
+    let mut top_spans = vec![
+        Span::styled("  📊 Today: ", Style::default().fg(Color::Yellow)),
+        Span::styled(
+            today_hours,
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(
+            "  ({today_sessions} session{})",
+            if today_sessions == 1 { "" } else { "s" }
+        )),
+    ];
+    if today_helping > 0 {
+        top_spans.push(Span::styled(
+            "  │  🤝 ",
+            Style::default().fg(Color::Magenta),
+        ));
+        top_spans.push(Span::raw(format!(
+            "{} helping",
+            store::format_hours(today_helping)
+        )));
+    }
+    top_spans.push(Span::raw(format!("  │  Cycle: {cycle}")));
+
     let lines = vec![
-        Line::from(vec![
-            Span::styled("  📊 Today: ", Style::default().fg(Color::Yellow)),
-            Span::styled(
-                today_hours,
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!(
-                "  ({today_sessions} session{})",
-                if today_sessions == 1 { "" } else { "s" }
-            )),
-            Span::raw(format!("  │  Cycle: {cycle}")),
-        ]),
+        Line::from(top_spans),
         Line::from(vec![
             Span::styled("  Work: ", Style::default().fg(Color::Red)),
             Span::raw(format!("{work_m}m")),
@@ -550,10 +569,12 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
             let icon = match entry.outcome {
                 Outcome::Completed => "✓",
                 Outcome::Skipped => "⏭",
+                Outcome::Helping => "🤝",
             };
             let outcome_str = match entry.outcome {
                 Outcome::Completed => "completed",
                 Outcome::Skipped => "skipped",
+                Outcome::Helping => "helping",
             };
             let entry_color = phase_color(entry.phase);
 

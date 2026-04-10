@@ -48,6 +48,7 @@ impl std::fmt::Display for Phase {
 pub enum Outcome {
     Completed,
     Skipped,
+    Helping,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +95,7 @@ pub struct App {
     pending_end_secs: u64,
     pending_end_wall: String,
     pending_end_wall_12h: String,
+    pub pending_is_helping: bool,
     pub todos: Vec<store::TodoItem>,
     pub todo_cursor: usize,
     pub todo_mode: TodoMode,
@@ -162,6 +164,7 @@ impl App {
             pending_end_secs: 0,
             pending_end_wall: String::new(),
             pending_end_wall_12h: String::new(),
+            pending_is_helping: false,
             todos: Vec::new(),
             todo_cursor: 0,
             todo_mode: TodoMode::Normal,
@@ -475,7 +478,9 @@ impl App {
     pub fn completed_work_sessions(&self) -> usize {
         self.history
             .iter()
-            .filter(|e| e.phase == Phase::Work && e.outcome == Outcome::Completed)
+            .filter(|e| {
+                e.phase == Phase::Work && matches!(e.outcome, Outcome::Completed | Outcome::Helping)
+            })
             .count()
     }
 
@@ -489,6 +494,7 @@ impl App {
                 secs,
                 &self.current_task,
                 outcome == Outcome::Completed,
+                false,
                 "",
             )
             .ok();
@@ -632,21 +638,35 @@ impl App {
     // -- End task (early completion with notes) --
 
     pub fn end_task(&mut self) {
+        self.end_work_session(false);
+    }
+
+    pub fn help_others(&mut self) {
+        self.end_work_session(true);
+    }
+
+    fn end_work_session(&mut self, helping: bool) {
         if self.phase != Phase::Work {
             return;
         }
         let elapsed = self.elapsed_secs();
+        let outcome = if helping {
+            Outcome::Helping
+        } else {
+            Outcome::Completed
+        };
 
         self.pending_end_secs = elapsed;
         self.pending_end_wall = store::local_time_str();
         self.pending_end_wall_12h = store::local_time_12h();
+        self.pending_is_helping = helping;
 
         self.history.push(HistoryEntry {
             session: self.session,
             phase: Phase::Work,
             elapsed_secs: elapsed,
             total_secs: self.phase_total_secs(),
-            outcome: Outcome::Completed,
+            outcome,
             task: self.current_task.clone(),
             start_time: self.phase_start_wall.clone(),
             end_time: self.pending_end_wall.clone(),
@@ -654,7 +674,11 @@ impl App {
 
         let today = store::local_date_str();
         let entry = self.daily_stats.entry(today).or_default();
-        entry.work_secs += elapsed;
+        if helping {
+            entry.helping_secs += elapsed;
+        } else {
+            entry.work_secs += elapsed;
+        }
         entry.sessions += 1;
 
         self.notes_input_buffer.clear();
@@ -692,6 +716,7 @@ impl App {
                 self.pending_end_secs,
                 &self.current_task,
                 true,
+                self.pending_is_helping,
                 notes,
             )
             .ok();
@@ -747,6 +772,11 @@ impl App {
     pub fn today_sessions(&self) -> u32 {
         let today = store::local_date_str();
         self.daily_stats.get(&today).map_or(0, |s| s.sessions)
+    }
+
+    pub fn today_helping_secs(&self) -> u64 {
+        let today = store::local_date_str();
+        self.daily_stats.get(&today).map_or(0, |s| s.helping_secs)
     }
 }
 
@@ -1220,5 +1250,36 @@ mod tests {
         app.todo_picking = true;
         app.todo_custom_task();
         assert_eq!(app.screen, Screen::TaskInput);
+    }
+
+    // -- Helping --
+
+    #[test]
+    fn test_help_others_goes_to_notes_input() {
+        let mut app = App::with_config(0, 5, 15, 4);
+        app.start_timer();
+        app.submit_task();
+        app.help_others();
+        assert_eq!(app.screen, Screen::NotesInput);
+        assert!(app.pending_is_helping);
+        assert_eq!(app.history.len(), 1);
+        assert_eq!(app.history[0].outcome, Outcome::Helping);
+    }
+
+    #[test]
+    fn test_help_others_tracks_helping_secs() {
+        let mut app = App::with_config(0, 5, 15, 4);
+        app.start_timer();
+        app.submit_task();
+        app.help_others();
+        assert_eq!(app.today_work_secs(), 0);
+    }
+
+    #[test]
+    fn test_help_others_noop_during_break() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.skip_phase();
+        app.help_others();
+        assert_ne!(app.screen, Screen::NotesInput);
     }
 }

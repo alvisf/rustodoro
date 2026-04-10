@@ -81,6 +81,7 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
                     KeyCode::Char(' ') => app.toggle_pause(),
                     KeyCode::Char('e') => app.end_task(),
+                    KeyCode::Char('h') => app.help_others(),
                     KeyCode::Char('s') | KeyCode::Char('n') => app.skip_phase(),
                     KeyCode::Char('d') => app.screen = Screen::DailyLog,
                     KeyCode::Char('t') => app.open_todo_list(false),

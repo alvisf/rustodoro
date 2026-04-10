@@ -9,6 +9,7 @@ use std::time::SystemTime;
 #[derive(Debug, Default, Clone)]
 pub struct DayStats {
     pub work_secs: u64,
+    pub helping_secs: u64,
     pub sessions: u32,
 }
 
@@ -118,6 +119,7 @@ fn quarterly_title(date: &str) -> String {
     format!("{year} Q{}", quarter_for_month(month))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn save_work_entry_md(
     date: &str,
     start_time: &str,
@@ -125,6 +127,7 @@ pub fn save_work_entry_md(
     duration_secs: u64,
     task: &str,
     completed: bool,
+    helping: bool,
     notes: &str,
 ) -> io::Result<()> {
     let dir = log_dir();
@@ -152,7 +155,13 @@ pub fn save_work_entry_md(
     }
 
     let duration = format_mmss(duration_secs);
-    let mark = if completed { "[x]" } else { "[ ]" };
+    let mark = if helping {
+        "[h]"
+    } else if completed {
+        "[x]"
+    } else {
+        "[ ]"
+    };
 
     if task.is_empty() {
         writeln!(file, "- {mark} {start_time} – {end_time} ({duration})")?;
@@ -355,7 +364,11 @@ fn parse_quarterly_file(contents: &str, stats: &mut BTreeMap<String, DayStats>) 
             && let Some(date) = &current_date
         {
             let day = stats.entry(date.clone()).or_default();
-            day.work_secs += secs;
+            if stripped.starts_with("[h]") {
+                day.helping_secs += secs;
+            } else {
+                day.work_secs += secs;
+            }
             day.sessions += 1;
         }
     }
@@ -367,7 +380,11 @@ fn parse_daily_file(date: &str, contents: &str, stats: &mut BTreeMap<String, Day
         if let Some(stripped) = line.strip_prefix("- ")
             && let Some(secs) = parse_entry_duration(stripped)
         {
-            day.work_secs += secs;
+            if stripped.starts_with("[h]") {
+                day.helping_secs += secs;
+            } else {
+                day.work_secs += secs;
+            }
             day.sessions += 1;
         }
     }
@@ -509,6 +526,24 @@ mod tests {
         assert_eq!(stats["2026-04-09"].work_secs, 3000);
         assert_eq!(stats["2026-04-10"].sessions, 1);
         assert_eq!(stats["2026-04-10"].work_secs, 1800);
+    }
+
+    #[test]
+    fn test_parse_helping_entries() {
+        let contents = "\
+# 2026 Q2
+
+## 2026-04-09
+
+- [x] 09:00 – 09:25 (25:00) task1
+- [h] 09:30 – 09:45 (15:00) helped Bob
+- [x] 10:00 – 10:25 (25:00) task2
+";
+        let mut stats = BTreeMap::new();
+        parse_quarterly_file(contents, &mut stats);
+        assert_eq!(stats["2026-04-09"].sessions, 3);
+        assert_eq!(stats["2026-04-09"].work_secs, 3000);
+        assert_eq!(stats["2026-04-09"].helping_secs, 900);
     }
 
     #[test]
