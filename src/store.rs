@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::BufRead;
 use std::io::{self, Write};
-use std::process::{Command, Stdio};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
 #[derive(Debug, Default, Clone)]
@@ -53,7 +53,13 @@ pub fn local_time_12h() -> String {
     };
     let hour = tm.tm_hour;
     let suffix = if hour < 12 { "AM" } else { "PM" };
-    let h12 = if hour == 0 { 12 } else if hour > 12 { hour - 12 } else { hour };
+    let h12 = if hour == 0 {
+        12
+    } else if hour > 12 {
+        hour - 12
+    } else {
+        hour
+    };
     format!("{h12}:{:02} {suffix}", tm.tm_min)
 }
 
@@ -113,6 +119,7 @@ pub fn save_work_entry_md(
     duration_secs: u64,
     task: &str,
     completed: bool,
+    notes: &str,
 ) -> io::Result<()> {
     let dir = log_dir();
     fs::create_dir_all(&dir)?;
@@ -128,10 +135,7 @@ pub fn save_work_entry_md(
         !contents.contains(&date_header)
     };
 
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
 
     if is_new {
         writeln!(file, "# {}\n", quarterly_title(date))?;
@@ -145,10 +149,17 @@ pub fn save_work_entry_md(
     let mark = if completed { "[x]" } else { "[ ]" };
 
     if task.is_empty() {
-        writeln!(file, "- {mark} {start_time} – {end_time} ({duration})")
+        writeln!(file, "- {mark} {start_time} – {end_time} ({duration})")?;
     } else {
-        writeln!(file, "- {mark} {start_time} – {end_time} ({duration}) {task}")
+        writeln!(
+            file,
+            "- {mark} {start_time} – {end_time} ({duration}) {task}"
+        )?;
     }
+    if !notes.is_empty() {
+        writeln!(file, "  > {notes}")?;
+    }
+    Ok(())
 }
 
 pub struct Config {
@@ -225,11 +236,16 @@ pub fn save_config(
 pub fn send_notification(title: &str, message: &str) {
     Command::new("terminal-notifier")
         .args([
-            "-title", title,
-            "-message", message,
-            "-appIcon", "/Users/alvisf/Documents/pomodoro_timer_icon.png",
-            "-sound", "default",
-            "-group", "pomodoro",
+            "-title",
+            title,
+            "-message",
+            message,
+            "-appIcon",
+            "/Users/alvisf/Documents/pomodoro_timer_icon.png",
+            "-sound",
+            "default",
+            "-group",
+            "pomodoro",
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -278,9 +294,7 @@ fn is_quarterly_filename(stem: &str) -> bool {
 }
 
 fn is_daily_filename(stem: &str) -> bool {
-    stem.len() == 10
-        && stem.as_bytes()[4] == b'-'
-        && stem.as_bytes()[7] == b'-'
+    stem.len() == 10 && stem.as_bytes()[4] == b'-' && stem.as_bytes()[7] == b'-'
 }
 
 fn parse_quarterly_file(contents: &str, stats: &mut BTreeMap<String, DayStats>) {
@@ -386,12 +400,12 @@ mod tests {
             parse_entry_duration("[x] 09:15 – 09:40 (25:00) task"),
             Some(1500)
         );
-        assert_eq!(
-            parse_entry_duration("[ ] 10:00 – 10:05 (05:30)"),
-            Some(330)
-        );
+        assert_eq!(parse_entry_duration("[ ] 10:00 – 10:05 (05:30)"), Some(330));
         // Old emoji format still parses
-        assert_eq!(parse_entry_duration("09:15 – 09:40 (25:00) ✅ task"), Some(1500));
+        assert_eq!(
+            parse_entry_duration("09:15 – 09:40 (25:00) ✅ task"),
+            Some(1500)
+        );
         assert_eq!(parse_entry_duration("no parens here"), None);
     }
 

@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
 };
 
-use crate::app::{format_duration, App, Outcome, Phase, Screen};
+use crate::app::{App, Outcome, Phase, Screen, format_duration};
 use crate::store;
 
 fn phase_color(phase: Phase) -> Color {
@@ -21,6 +21,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     match app.screen {
         Screen::Setup => draw_setup(frame, app),
         Screen::TaskInput => draw_task_input(frame, app),
+        Screen::NotesInput => draw_notes_input(frame, app),
         Screen::Timer => draw_timer_screen(frame, app),
         Screen::DailyLog => draw_daily_log(frame, app),
     }
@@ -84,7 +85,16 @@ fn draw_setup(frame: &mut Frame, app: &App) {
     let para = Paragraph::new(lines).alignment(Alignment::Center);
     frame.render_widget(para, inner);
 
-    draw_controls(frame, chunks[1], &[("↑↓", "navigate"), ("←→", "adjust"), ("Enter", "start"), ("q", "quit")]);
+    draw_controls(
+        frame,
+        chunks[1],
+        &[
+            ("↑↓", "navigate"),
+            ("←→", "adjust"),
+            ("Enter", "start"),
+            ("q", "quit"),
+        ],
+    );
 }
 
 // ── Task input screen ─────────────────────────────────────
@@ -131,6 +141,58 @@ fn draw_task_input(frame: &mut Frame, app: &App) {
     draw_controls(frame, chunks[1], &[("Enter", "start"), ("Esc", "skip")]);
 }
 
+// ── Notes input screen ───────────────────────────────────
+
+fn draw_notes_input(frame: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(3)])
+        .split(frame.area());
+
+    let block = Block::default()
+        .title(" 🍅 Pomodoro Timer ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green));
+
+    let inner = block.inner(chunks[0]);
+    frame.render_widget(block, chunks[0]);
+
+    let content_height: u16 = 7;
+    let v_pad = inner.height.saturating_sub(content_height) / 2;
+
+    let mut lines: Vec<Line> = Vec::new();
+    for _ in 0..v_pad {
+        lines.push(Line::from(""));
+    }
+
+    if !app.current_task.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("Task: {}", app.current_task),
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(Span::styled(
+        "Any notes on this task?",
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    let input_text = format!("> {}▏", app.notes_input_buffer);
+    lines.push(Line::from(Span::styled(
+        input_text,
+        Style::default().fg(Color::Yellow),
+    )));
+
+    let para = Paragraph::new(lines).alignment(Alignment::Center);
+    frame.render_widget(para, inner);
+
+    draw_controls(frame, chunks[1], &[("Enter", "save"), ("Esc", "skip")]);
+}
+
 // ── Timer screen ──────────────────────────────────────────
 
 fn draw_timer_screen(frame: &mut Frame, app: &App) {
@@ -152,6 +214,7 @@ fn draw_timer_screen(frame: &mut Frame, app: &App) {
     let mut bindings: Vec<(&str, &str)> = vec![("space", pause_label)];
     if app.phase == Phase::Work {
         bindings.push(("Enter", "break"));
+        bindings.push(("e", "end task"));
     }
     bindings.extend([("s", "skip"), ("d", "daily log"), ("q", "quit")]);
     draw_controls(frame, chunks[3], &bindings);
@@ -230,7 +293,9 @@ fn draw_timer(frame: &mut Frame, area: Rect, app: &App) {
         task_line,
         Line::from(Span::styled(
             time_str,
-            Style::default().fg(if overtime { Color::Yellow } else { color }).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(if overtime { Color::Yellow } else { color })
+                .add_modifier(Modifier::BOLD),
         )),
         status_line,
     ]);
@@ -354,10 +419,7 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
             let entry_color = phase_color(entry.phase);
 
             let mut spans = vec![
-                Span::styled(
-                    format!("  {icon} "),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(format!("  {icon} "), Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("#{:<3} ", entry.session),
                     Style::default().fg(Color::White),
@@ -455,10 +517,7 @@ fn draw_daily_log(frame: &mut Frame, app: &App) {
 
             items.push(ListItem::new(Line::from(vec![
                 Span::styled(format!("  {date}  "), style),
-                Span::styled(
-                    format!("{label}  "),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(format!("{label}  "), Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{hours:>8}"), style),
                 Span::styled(
                     format!(

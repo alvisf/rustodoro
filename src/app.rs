@@ -7,6 +7,7 @@ use crate::store::{self, DayStats};
 pub enum Screen {
     Setup,
     TaskInput,
+    NotesInput,
     Timer,
     DailyLog,
 }
@@ -81,6 +82,10 @@ pub struct App {
     persist: bool,
     pub current_task: String,
     pub task_input_buffer: String,
+    pub notes_input_buffer: String,
+    pending_end_secs: u64,
+    pending_end_wall: String,
+    pending_end_wall_12h: String,
     phase_start_wall: String,
     phase_start_wall_12h: String,
     overtime_notified: bool,
@@ -140,6 +145,10 @@ impl App {
             persist: false,
             current_task: String::new(),
             task_input_buffer: String::new(),
+            notes_input_buffer: String::new(),
+            pending_end_secs: 0,
+            pending_end_wall: String::new(),
+            pending_end_wall_12h: String::new(),
             phase_start_wall: String::new(),
             phase_start_wall_12h: String::new(),
             overtime_notified: false,
@@ -276,8 +285,10 @@ impl App {
             self.finish_phase(Outcome::Completed);
         }
 
-        if self.persist && self.phase == Phase::Work
-            && self.is_overtime() && !self.overtime_notified
+        if self.persist
+            && self.phase == Phase::Work
+            && self.is_overtime()
+            && !self.overtime_notified
         {
             self.overtime_notified = true;
             store::send_notification("⏰ Time's up!", "Take a break when you're ready");
@@ -334,14 +345,10 @@ impl App {
             self.reset_timer();
             if self.persist {
                 let msg = match self.phase {
-                    Phase::LongBreak => format!(
-                        "Great work! Relax for {} min",
-                        self.long_break_secs / 60,
-                    ),
-                    Phase::Break => format!(
-                        "Relax for {} min",
-                        self.break_secs / 60,
-                    ),
+                    Phase::LongBreak => {
+                        format!("Great work! Relax for {} min", self.long_break_secs / 60,)
+                    }
+                    Phase::Break => format!("Relax for {} min", self.break_secs / 60,),
                     _ => String::new(),
                 };
                 let title = match self.phase {
@@ -397,16 +404,19 @@ impl App {
         if self.persist {
             match (prev_phase, self.phase) {
                 (Phase::Break | Phase::LongBreak, Phase::Work) => {
-                    store::send_notification(
-                        "🍅 Break's over!",
-                        "Time to get back to work",
-                    );
+                    store::send_notification("🍅 Break's over!", "Time to get back to work");
                 }
                 (Phase::Work, Phase::Break) => {
-                    store::send_notification("☕ Break time!", &format!("Relax for {} min", self.break_secs / 60));
+                    store::send_notification(
+                        "☕ Break time!",
+                        &format!("Relax for {} min", self.break_secs / 60),
+                    );
                 }
                 (Phase::Work, Phase::LongBreak) => {
-                    store::send_notification("🌴 Long break!", &format!("Great work! Relax for {} min", self.long_break_secs / 60));
+                    store::send_notification(
+                        "🌴 Long break!",
+                        &format!("Great work! Relax for {} min", self.long_break_secs / 60),
+                    );
                 }
                 _ => {}
             }
@@ -464,6 +474,7 @@ impl App {
                 secs,
                 &self.current_task,
                 outcome == Outcome::Completed,
+                "",
             )
             .ok();
         }
@@ -472,10 +483,102 @@ impl App {
         entry.sessions += 1;
     }
 
+    // -- End task (early completion with notes) --
+
+    pub fn end_task(&mut self) {
+        if self.phase != Phase::Work {
+            return;
+        }
+        let elapsed = self.elapsed_secs();
+
+        self.pending_end_secs = elapsed;
+        self.pending_end_wall = store::local_time_str();
+        self.pending_end_wall_12h = store::local_time_12h();
+
+        self.history.push(HistoryEntry {
+            session: self.session,
+            phase: Phase::Work,
+            elapsed_secs: elapsed,
+            total_secs: self.phase_total_secs(),
+            outcome: Outcome::Completed,
+            task: self.current_task.clone(),
+            start_time: self.phase_start_wall.clone(),
+            end_time: self.pending_end_wall.clone(),
+        });
+
+        let today = store::local_date_str();
+        let entry = self.daily_stats.entry(today).or_default();
+        entry.work_secs += elapsed;
+        entry.sessions += 1;
+
+        self.notes_input_buffer.clear();
+        self.screen = Screen::NotesInput;
+    }
+
+    pub fn notes_input_char(&mut self, c: char) {
+        self.notes_input_buffer.push(c);
+    }
+
+    pub fn notes_input_backspace(&mut self) {
+        self.notes_input_buffer.pop();
+    }
+
+    pub fn submit_notes(&mut self) {
+        let notes = self.notes_input_buffer.trim().to_string();
+        self.save_pending_entry(&notes);
+        self.notes_input_buffer.clear();
+        self.transition_to_break();
+    }
+
+    pub fn skip_notes(&mut self) {
+        self.save_pending_entry("");
+        self.notes_input_buffer.clear();
+        self.transition_to_break();
+    }
+
+    fn save_pending_entry(&self, notes: &str) {
+        if self.persist {
+            let today = store::local_date_str();
+            store::save_work_entry_md(
+                &today,
+                &self.phase_start_wall_12h,
+                &self.pending_end_wall_12h,
+                self.pending_end_secs,
+                &self.current_task,
+                true,
+                notes,
+            )
+            .ok();
+        }
+    }
+
+    fn transition_to_break(&mut self) {
+        self.advance_phase();
+        self.reset_timer();
+        if self.persist {
+            let (title, msg) = match self.phase {
+                Phase::LongBreak => (
+                    "🌴 Long break!",
+                    format!("Great work! Relax for {} min", self.long_break_secs / 60),
+                ),
+                Phase::Break => (
+                    "☕ Break time!",
+                    format!("Relax for {} min", self.break_secs / 60),
+                ),
+                _ => ("", String::new()),
+            };
+            if !title.is_empty() {
+                store::send_notification(title, &msg);
+            }
+        }
+    }
+
     pub fn save_current_work_if_needed(&mut self) {
-        if self.phase == Phase::Work
-            && matches!(self.screen, Screen::Timer | Screen::DailyLog)
-        {
+        if self.screen == Screen::NotesInput && self.pending_end_secs > 0 {
+            self.save_pending_entry("");
+            return;
+        }
+        if self.phase == Phase::Work && matches!(self.screen, Screen::Timer | Screen::DailyLog) {
             let elapsed = self.elapsed_secs();
             if elapsed > 0 {
                 let end_wall_12h = store::local_time_12h();
@@ -785,5 +888,62 @@ mod tests {
         app.tick(); // Break (0 dur) completes -> Work
         app.confirm_break(); // Work -> Break
         assert_eq!(app.completed_work_sessions(), 2);
+    }
+
+    // -- End task & notes --
+
+    #[test]
+    fn test_end_task_goes_to_notes_input() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.start_timer();
+        app.submit_task();
+        assert_eq!(app.screen, Screen::Timer);
+        // With 0-duration work_secs=25min, elapsed > 0 only after real time.
+        // Use with_config(0, ...) so elapsed >= total immediately.
+        let mut app = App::with_config(0, 5, 15, 4);
+        app.start_timer();
+        app.task_input_char('X');
+        app.submit_task();
+        app.end_task();
+        assert_eq!(app.screen, Screen::NotesInput);
+        assert_eq!(app.history.len(), 1);
+        assert_eq!(app.history[0].outcome, Outcome::Completed);
+        assert_eq!(app.history[0].task, "X");
+    }
+
+    #[test]
+    fn test_end_task_noop_during_break() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.skip_phase(); // Work -> Break
+        app.end_task();
+        assert_eq!(app.phase, Phase::Break);
+        assert_ne!(app.screen, Screen::NotesInput);
+    }
+
+    #[test]
+    fn test_submit_notes_goes_to_break() {
+        let mut app = App::with_config(0, 5, 15, 4);
+        app.start_timer();
+        app.submit_task();
+        app.end_task();
+        assert_eq!(app.screen, Screen::NotesInput);
+        app.notes_input_char('g');
+        app.notes_input_char('o');
+        app.notes_input_char('o');
+        app.notes_input_char('d');
+        app.submit_notes();
+        assert_eq!(app.phase, Phase::Break);
+        assert!(app.notes_input_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_skip_notes_goes_to_break() {
+        let mut app = App::with_config(0, 5, 15, 4);
+        app.start_timer();
+        app.submit_task();
+        app.end_task();
+        app.skip_notes();
+        assert_eq!(app.phase, Phase::Break);
+        assert!(app.notes_input_buffer.is_empty());
     }
 }

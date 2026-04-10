@@ -6,11 +6,11 @@ use std::io;
 use std::time::Duration;
 
 use crossterm::{
+    ExecutableCommand,
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
-    ExecutableCommand,
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 
 use app::{App, Screen};
 
@@ -55,9 +55,17 @@ fn main() -> io::Result<()> {
                 Screen::Timer => match code {
                     KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
                     KeyCode::Char(' ') => app.toggle_pause(),
+                    KeyCode::Char('e') => app.end_task(),
                     KeyCode::Char('s') | KeyCode::Char('n') => app.skip_phase(),
                     KeyCode::Char('d') => app.screen = Screen::DailyLog,
                     KeyCode::Enter => app.confirm_break(),
+                    _ => {}
+                },
+                Screen::NotesInput => match code {
+                    KeyCode::Enter => app.submit_notes(),
+                    KeyCode::Esc => app.skip_notes(),
+                    KeyCode::Backspace => app.notes_input_backspace(),
+                    KeyCode::Char(c) => app.notes_input_char(c),
                     _ => {}
                 },
                 Screen::DailyLog => match code {
@@ -81,7 +89,10 @@ fn main() -> io::Result<()> {
     terminal::disable_raw_mode()?;
     io::stdout().execute(LeaveAlternateScreen)?;
 
-    if matches!(app.screen, Screen::Timer | Screen::DailyLog | Screen::TaskInput) {
+    if matches!(
+        app.screen,
+        Screen::Timer | Screen::DailyLog | Screen::TaskInput
+    ) {
         let completed = app.completed_work_sessions();
         println!(
             "👋 Done! Completed {} work session{}. Great job!",
