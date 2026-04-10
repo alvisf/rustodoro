@@ -726,6 +726,7 @@ impl App {
     fn transition_to_break(&mut self) {
         self.advance_phase();
         self.reset_timer();
+        self.screen = Screen::Timer;
         if self.persist {
             let (title, msg) = match self.phase {
                 Phase::LongBreak => (
@@ -1109,6 +1110,7 @@ mod tests {
         app.notes_input_char('d');
         app.submit_notes();
         assert_eq!(app.phase, Phase::Break);
+        assert_eq!(app.screen, Screen::Timer);
         assert!(app.notes_input_buffer.is_empty());
     }
 
@@ -1120,6 +1122,7 @@ mod tests {
         app.end_task();
         app.skip_notes();
         assert_eq!(app.phase, Phase::Break);
+        assert_eq!(app.screen, Screen::Timer);
         assert!(app.notes_input_buffer.is_empty());
     }
 
