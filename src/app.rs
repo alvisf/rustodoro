@@ -334,6 +334,10 @@ impl App {
         self.pause_accumulated += Duration::from_secs(300);
     }
 
+    pub fn extend_work(&mut self) {
+        self.work_secs += 300;
+    }
+
     pub fn skip_phase(&mut self) {
         self.finish_phase(Outcome::Skipped);
     }
