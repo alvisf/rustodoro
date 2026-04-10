@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
 };
 
-use crate::app::{App, Outcome, Phase, Screen, format_duration};
+use crate::app::{App, Outcome, Phase, Screen, TodoMode, format_duration};
 use crate::store;
 
 fn phase_color(phase: Phase) -> Color {
@@ -21,6 +21,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     match app.screen {
         Screen::Setup => draw_setup(frame, app),
         Screen::TaskInput => draw_task_input(frame, app),
+        Screen::TodoList => draw_todo_list(frame, app),
         Screen::NotesInput => draw_notes_input(frame, app),
         Screen::Timer => draw_timer_screen(frame, app),
         Screen::DailyLog => draw_daily_log(frame, app),
@@ -141,6 +142,139 @@ fn draw_task_input(frame: &mut Frame, app: &App) {
     draw_controls(frame, chunks[1], &[("Enter", "start"), ("Esc", "skip")]);
 }
 
+// ── Todo list screen ──────────────────────────────────────
+
+fn draw_todo_list(frame: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(3)])
+        .split(frame.area());
+
+    let title = if app.todo_picking {
+        " 📝 Pick a task "
+    } else {
+        " 📝 Todo List "
+    };
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let inner = block.inner(chunks[0]);
+    frame.render_widget(block, chunks[0]);
+
+    match app.todo_mode {
+        TodoMode::Adding | TodoMode::Editing(_) => {
+            draw_todo_input(frame, inner, app);
+        }
+        TodoMode::Normal => {
+            draw_todo_normal(frame, inner, app);
+        }
+    }
+
+    let controls: Vec<(&str, &str)> = if app.todo_is_input_mode() {
+        vec![("Enter", "save"), ("Esc", "cancel")]
+    } else if app.todo_picking {
+        vec![
+            ("↑↓", "nav"),
+            ("Enter", "start"),
+            ("a", "add"),
+            ("e", "edit"),
+            ("d", "del"),
+            ("space", "done"),
+            ("n", "custom"),
+            ("Esc", "skip"),
+        ]
+    } else {
+        vec![
+            ("↑↓", "nav"),
+            ("space", "done"),
+            ("a", "add"),
+            ("e", "edit"),
+            ("d", "del"),
+            ("Esc", "back"),
+        ]
+    };
+    draw_controls(frame, chunks[1], &controls);
+}
+
+fn draw_todo_normal(frame: &mut Frame, area: Rect, app: &App) {
+    if app.todos.is_empty() {
+        let msg = if app.todo_picking {
+            "No todos yet. Press 'a' to add or 'n' for a custom task."
+        } else {
+            "No todos yet. Press 'a' to add one."
+        };
+        let v_pad = area.height / 2;
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(v_pad), Constraint::Min(1)])
+            .split(area);
+        let para = Paragraph::new(Line::from(Span::styled(
+            msg,
+            Style::default().fg(Color::DarkGray),
+        )))
+        .alignment(Alignment::Center);
+        frame.render_widget(para, rows[1]);
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .todos
+        .iter()
+        .enumerate()
+        .map(|(i, todo)| {
+            let selected = i == app.todo_cursor;
+            let marker = if selected { "▸ " } else { "  " };
+            let check = if todo.done { "[x]" } else { "[ ]" };
+            let style = if todo.done {
+                Style::default().fg(Color::DarkGray)
+            } else if selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            ListItem::new(Line::from(Span::styled(
+                format!("{marker}{check} {}", todo.text),
+                style,
+            )))
+        })
+        .collect();
+
+    let list = List::new(items);
+    frame.render_widget(list, area);
+}
+
+fn draw_todo_input(frame: &mut Frame, area: Rect, app: &App) {
+    let label = match app.todo_mode {
+        TodoMode::Adding => "Add todo:",
+        TodoMode::Editing(_) => "Edit todo:",
+        _ => "",
+    };
+
+    let v_pad = area.height / 2;
+    let mut lines: Vec<Line> = Vec::new();
+    for _ in 0..v_pad {
+        lines.push(Line::from(""));
+    }
+    lines.push(Line::from(Span::styled(
+        label,
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("> {}▏", app.todo_input_buffer),
+        Style::default().fg(Color::Yellow),
+    )));
+
+    let para = Paragraph::new(lines).alignment(Alignment::Center);
+    frame.render_widget(para, area);
+}
+
 // ── Notes input screen ───────────────────────────────────
 
 fn draw_notes_input(frame: &mut Frame, app: &App) {
@@ -216,7 +350,12 @@ fn draw_timer_screen(frame: &mut Frame, app: &App) {
         bindings.push(("Enter", "break"));
         bindings.push(("e", "end task"));
     }
-    bindings.extend([("s", "skip"), ("d", "daily log"), ("q", "quit")]);
+    bindings.extend([
+        ("s", "skip"),
+        ("t", "todos"),
+        ("d", "daily log"),
+        ("q", "quit"),
+    ]);
     draw_controls(frame, chunks[3], &bindings);
 }
 

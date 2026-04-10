@@ -12,6 +12,12 @@ pub struct DayStats {
     pub sessions: u32,
 }
 
+#[derive(Debug, Clone)]
+pub struct TodoItem {
+    pub text: String,
+    pub done: bool,
+}
+
 const LOG_DIR: &str = "/Users/alvisf/Documents/Notes/daily-logs";
 
 fn config_path() -> PathBuf {
@@ -231,6 +237,45 @@ pub fn save_config(
          long_break_secs={long_break_secs}\nsessions_before_long={sessions_before_long}\n"
     );
     fs::write(config_path(), contents)
+}
+
+fn todo_path() -> PathBuf {
+    log_dir().join(".pomodoro_todos")
+}
+
+fn parse_todo_line(line: &str) -> Option<TodoItem> {
+    if let Some(text) = line.strip_prefix("- [x] ") {
+        Some(TodoItem {
+            text: text.to_string(),
+            done: true,
+        })
+    } else {
+        line.strip_prefix("- [ ] ").map(|text| TodoItem {
+            text: text.to_string(),
+            done: false,
+        })
+    }
+}
+
+pub fn load_todos() -> Vec<TodoItem> {
+    let path = todo_path();
+    let Ok(contents) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    contents.lines().filter_map(parse_todo_line).collect()
+}
+
+pub fn save_todos(todos: &[TodoItem]) -> io::Result<()> {
+    let dir = log_dir();
+    fs::create_dir_all(&dir)?;
+    let content: String = todos
+        .iter()
+        .map(|t| {
+            let mark = if t.done { "[x]" } else { "[ ]" };
+            format!("- {mark} {}\n", t.text)
+        })
+        .collect();
+    fs::write(todo_path(), content)
 }
 
 pub fn send_notification(title: &str, message: &str) {
@@ -479,5 +524,41 @@ mod tests {
         assert_eq!(stats.len(), 1);
         assert_eq!(stats["2026-04-09"].sessions, 2);
         assert_eq!(stats["2026-04-09"].work_secs, 2100);
+    }
+
+    #[test]
+    fn test_parse_todo_line() {
+        let item = parse_todo_line("- [ ] Buy groceries").unwrap();
+        assert_eq!(item.text, "Buy groceries");
+        assert!(!item.done);
+
+        let item = parse_todo_line("- [x] Write report").unwrap();
+        assert_eq!(item.text, "Write report");
+        assert!(item.done);
+
+        assert!(parse_todo_line("not a todo").is_none());
+        assert!(parse_todo_line("- Buy groceries").is_none());
+    }
+
+    #[test]
+    fn test_todo_serialize() {
+        let todos = vec![
+            TodoItem {
+                text: "Task A".to_string(),
+                done: false,
+            },
+            TodoItem {
+                text: "Task B".to_string(),
+                done: true,
+            },
+        ];
+        let content: String = todos
+            .iter()
+            .map(|t| {
+                let mark = if t.done { "[x]" } else { "[ ]" };
+                format!("- {mark} {}\n", t.text)
+            })
+            .collect();
+        assert_eq!(content, "- [ ] Task A\n- [x] Task B\n");
     }
 }

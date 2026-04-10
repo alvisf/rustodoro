@@ -7,6 +7,7 @@ use crate::store::{self, DayStats};
 pub enum Screen {
     Setup,
     TaskInput,
+    TodoList,
     NotesInput,
     Timer,
     DailyLog,
@@ -49,6 +50,13 @@ pub enum Outcome {
     Skipped,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TodoMode {
+    Normal,
+    Adding,
+    Editing(usize),
+}
+
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
     pub session: u32,
@@ -86,6 +94,11 @@ pub struct App {
     pending_end_secs: u64,
     pending_end_wall: String,
     pending_end_wall_12h: String,
+    pub todos: Vec<store::TodoItem>,
+    pub todo_cursor: usize,
+    pub todo_mode: TodoMode,
+    pub todo_input_buffer: String,
+    pub todo_picking: bool,
     phase_start_wall: String,
     phase_start_wall_12h: String,
     overtime_notified: bool,
@@ -149,6 +162,11 @@ impl App {
             pending_end_secs: 0,
             pending_end_wall: String::new(),
             pending_end_wall_12h: String::new(),
+            todos: Vec::new(),
+            todo_cursor: 0,
+            todo_mode: TodoMode::Normal,
+            todo_input_buffer: String::new(),
+            todo_picking: false,
             phase_start_wall: String::new(),
             phase_start_wall_12h: String::new(),
             overtime_notified: false,
@@ -195,8 +213,7 @@ impl App {
             )
             .ok();
         }
-        self.task_input_buffer.clear();
-        self.screen = Screen::TaskInput;
+        self.open_todo_list(true);
     }
 
     // -- Task input --
@@ -364,8 +381,7 @@ impl App {
             self.session += breaks_to_skip;
             self.reset_timer();
             if self.screen == Screen::Timer {
-                self.task_input_buffer.clear();
-                self.screen = Screen::TaskInput;
+                self.open_todo_list(true);
             }
         }
     }
@@ -423,8 +439,7 @@ impl App {
         }
 
         if self.phase == Phase::Work && self.screen == Screen::Timer {
-            self.task_input_buffer.clear();
-            self.screen = Screen::TaskInput;
+            self.open_todo_list(true);
         }
     }
 
@@ -481,6 +496,137 @@ impl App {
         let entry = self.daily_stats.entry(today).or_default();
         entry.work_secs += secs;
         entry.sessions += 1;
+    }
+
+    // -- Todo list --
+
+    pub fn open_todo_list(&mut self, picking: bool) {
+        self.todo_picking = picking;
+        self.todo_cursor = 0;
+        self.todo_mode = TodoMode::Normal;
+        self.todo_input_buffer.clear();
+        if self.persist {
+            self.todos = store::load_todos();
+        }
+        self.screen = Screen::TodoList;
+    }
+
+    pub fn todo_is_input_mode(&self) -> bool {
+        !matches!(self.todo_mode, TodoMode::Normal)
+    }
+
+    pub fn todo_up(&mut self) {
+        self.todo_cursor = self.todo_cursor.saturating_sub(1);
+    }
+
+    pub fn todo_down(&mut self) {
+        if !self.todos.is_empty() {
+            self.todo_cursor = (self.todo_cursor + 1).min(self.todos.len() - 1);
+        }
+    }
+
+    pub fn todo_start_add(&mut self) {
+        self.todo_input_buffer.clear();
+        self.todo_mode = TodoMode::Adding;
+    }
+
+    pub fn todo_start_edit(&mut self) {
+        if self.todos.is_empty() {
+            return;
+        }
+        self.todo_input_buffer = self.todos[self.todo_cursor].text.clone();
+        self.todo_mode = TodoMode::Editing(self.todo_cursor);
+    }
+
+    pub fn todo_input_char(&mut self, c: char) {
+        self.todo_input_buffer.push(c);
+    }
+
+    pub fn todo_input_backspace(&mut self) {
+        self.todo_input_buffer.pop();
+    }
+
+    pub fn todo_confirm_input(&mut self) {
+        let text = self.todo_input_buffer.trim().to_string();
+        if text.is_empty() {
+            self.todo_mode = TodoMode::Normal;
+            self.todo_input_buffer.clear();
+            return;
+        }
+        match self.todo_mode {
+            TodoMode::Adding => {
+                self.todos.push(store::TodoItem { text, done: false });
+                self.todo_cursor = self.todos.len() - 1;
+            }
+            TodoMode::Editing(idx) => {
+                if idx < self.todos.len() {
+                    self.todos[idx].text = text;
+                }
+            }
+            TodoMode::Normal => {}
+        }
+        self.todo_mode = TodoMode::Normal;
+        self.todo_input_buffer.clear();
+        self.persist_todos();
+    }
+
+    pub fn todo_cancel_input(&mut self) {
+        self.todo_mode = TodoMode::Normal;
+        self.todo_input_buffer.clear();
+    }
+
+    pub fn todo_delete(&mut self) {
+        if self.todos.is_empty() {
+            return;
+        }
+        self.todos.remove(self.todo_cursor);
+        if self.todo_cursor >= self.todos.len() && self.todo_cursor > 0 {
+            self.todo_cursor -= 1;
+        }
+        self.persist_todos();
+    }
+
+    pub fn todo_toggle(&mut self) {
+        if self.todos.is_empty() {
+            return;
+        }
+        self.todos[self.todo_cursor].done = !self.todos[self.todo_cursor].done;
+        self.persist_todos();
+    }
+
+    pub fn todo_select(&mut self) {
+        if self.todos.is_empty() {
+            return;
+        }
+        if self.todo_picking {
+            self.current_task = self.todos[self.todo_cursor].text.clone();
+            self.begin_work_phase();
+        } else {
+            self.todo_toggle();
+        }
+    }
+
+    pub fn todo_back(&mut self) {
+        if self.todo_picking {
+            self.current_task = String::new();
+            self.begin_work_phase();
+        } else {
+            self.screen = Screen::Timer;
+        }
+    }
+
+    pub fn todo_custom_task(&mut self) {
+        if !self.todo_picking {
+            return;
+        }
+        self.task_input_buffer.clear();
+        self.screen = Screen::TaskInput;
+    }
+
+    fn persist_todos(&self) {
+        if self.persist {
+            store::save_todos(&self.todos).ok();
+        }
     }
 
     // -- End task (early completion with notes) --
@@ -712,11 +858,11 @@ mod tests {
     }
 
     #[test]
-    fn test_start_timer_goes_to_task_input() {
+    fn test_start_timer_goes_to_todo_list() {
         let mut app = App::with_config(25, 5, 15, 4);
         assert_eq!(app.screen, Screen::Setup);
         app.start_timer();
-        assert_eq!(app.screen, Screen::TaskInput);
+        assert_eq!(app.screen, Screen::TodoList);
     }
 
     // -- Task input --
@@ -945,5 +1091,134 @@ mod tests {
         app.skip_notes();
         assert_eq!(app.phase, Phase::Break);
         assert!(app.notes_input_buffer.is_empty());
+    }
+
+    // -- Todo list --
+
+    #[test]
+    fn test_open_todo_list_picking() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.start_timer();
+        assert_eq!(app.screen, Screen::TodoList);
+        assert!(app.todo_picking);
+    }
+
+    #[test]
+    fn test_open_todo_list_manage() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.open_todo_list(false);
+        assert_eq!(app.screen, Screen::TodoList);
+        assert!(!app.todo_picking);
+    }
+
+    #[test]
+    fn test_todo_add_and_navigate() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.open_todo_list(true);
+        app.todo_start_add();
+        assert!(app.todo_is_input_mode());
+        app.todo_input_char('T');
+        app.todo_input_char('a');
+        app.todo_input_char('s');
+        app.todo_input_char('k');
+        app.todo_confirm_input();
+        assert!(!app.todo_is_input_mode());
+        assert_eq!(app.todos.len(), 1);
+        assert_eq!(app.todos[0].text, "Task");
+        app.todo_start_add();
+        app.todo_input_char('B');
+        app.todo_confirm_input();
+        assert_eq!(app.todos.len(), 2);
+        app.todo_cursor = 0;
+        app.todo_down();
+        assert_eq!(app.todo_cursor, 1);
+        app.todo_up();
+        assert_eq!(app.todo_cursor, 0);
+    }
+
+    #[test]
+    fn test_todo_delete() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.todos.push(store::TodoItem {
+            text: "A".into(),
+            done: false,
+        });
+        app.todos.push(store::TodoItem {
+            text: "B".into(),
+            done: false,
+        });
+        app.todo_cursor = 1;
+        app.todo_delete();
+        assert_eq!(app.todos.len(), 1);
+        assert_eq!(app.todo_cursor, 0);
+    }
+
+    #[test]
+    fn test_todo_toggle() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.todos.push(store::TodoItem {
+            text: "A".into(),
+            done: false,
+        });
+        app.todo_toggle();
+        assert!(app.todos[0].done);
+        app.todo_toggle();
+        assert!(!app.todos[0].done);
+    }
+
+    #[test]
+    fn test_todo_select_starts_work() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.todo_picking = true;
+        app.todos.push(store::TodoItem {
+            text: "My task".into(),
+            done: false,
+        });
+        app.todo_select();
+        assert_eq!(app.current_task, "My task");
+        assert_eq!(app.screen, Screen::Timer);
+    }
+
+    #[test]
+    fn test_todo_edit() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.todos.push(store::TodoItem {
+            text: "Old".into(),
+            done: false,
+        });
+        app.todo_start_edit();
+        assert!(app.todo_is_input_mode());
+        assert_eq!(app.todo_input_buffer, "Old");
+        app.todo_input_buffer.clear();
+        app.todo_input_char('N');
+        app.todo_input_char('e');
+        app.todo_input_char('w');
+        app.todo_confirm_input();
+        assert_eq!(app.todos[0].text, "New");
+    }
+
+    #[test]
+    fn test_todo_back_picking_starts_with_no_task() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.todo_picking = true;
+        app.todo_back();
+        assert_eq!(app.screen, Screen::Timer);
+        assert!(app.current_task.is_empty());
+    }
+
+    #[test]
+    fn test_todo_back_manage_returns_to_timer() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.open_todo_list(false);
+        app.todo_back();
+        assert_eq!(app.screen, Screen::Timer);
+    }
+
+    #[test]
+    fn test_todo_custom_task() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.todo_picking = true;
+        app.todo_custom_task();
+        assert_eq!(app.screen, Screen::TaskInput);
     }
 }

@@ -45,6 +45,31 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
                     _ => {}
                 },
+                Screen::TodoList => {
+                    if app.todo_is_input_mode() {
+                        match code {
+                            KeyCode::Enter => app.todo_confirm_input(),
+                            KeyCode::Esc => app.todo_cancel_input(),
+                            KeyCode::Backspace => app.todo_input_backspace(),
+                            KeyCode::Char(c) => app.todo_input_char(c),
+                            _ => {}
+                        }
+                    } else {
+                        match code {
+                            KeyCode::Up | KeyCode::Char('k') => app.todo_up(),
+                            KeyCode::Down | KeyCode::Char('j') => app.todo_down(),
+                            KeyCode::Enter => app.todo_select(),
+                            KeyCode::Char('a') => app.todo_start_add(),
+                            KeyCode::Char('e') => app.todo_start_edit(),
+                            KeyCode::Char('d') => app.todo_delete(),
+                            KeyCode::Char(' ') => app.todo_toggle(),
+                            KeyCode::Char('n') => app.todo_custom_task(),
+                            KeyCode::Esc => app.todo_back(),
+                            KeyCode::Char('q') => app.should_quit = true,
+                            _ => {}
+                        }
+                    }
+                }
                 Screen::TaskInput => match code {
                     KeyCode::Enter => app.submit_task(),
                     KeyCode::Esc => app.skip_task_input(),
@@ -58,6 +83,7 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('e') => app.end_task(),
                     KeyCode::Char('s') | KeyCode::Char('n') => app.skip_phase(),
                     KeyCode::Char('d') => app.screen = Screen::DailyLog,
+                    KeyCode::Char('t') => app.open_todo_list(false),
                     KeyCode::Enter => app.confirm_break(),
                     _ => {}
                 },
@@ -89,10 +115,7 @@ fn main() -> io::Result<()> {
     terminal::disable_raw_mode()?;
     io::stdout().execute(LeaveAlternateScreen)?;
 
-    if matches!(
-        app.screen,
-        Screen::Timer | Screen::DailyLog | Screen::TaskInput
-    ) {
+    if !matches!(app.screen, Screen::Setup) {
         let completed = app.completed_work_sessions();
         println!(
             "👋 Done! Completed {} work session{}. Great job!",
