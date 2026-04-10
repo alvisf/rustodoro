@@ -357,8 +357,9 @@ fn draw_timer_screen(frame: &mut Frame, app: &App) {
     }
     bindings.extend([
         ("s", "skip"),
+        ("d", "-5m"),
         ("t", "todos"),
-        ("d", "daily log"),
+        ("l", "log"),
         ("q", "quit"),
     ]);
     draw_controls(frame, chunks[3], &bindings);

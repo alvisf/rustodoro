@@ -327,6 +327,13 @@ impl App {
         }
     }
 
+    pub fn distraction(&mut self) {
+        if self.phase != Phase::Work {
+            return;
+        }
+        self.pause_accumulated += Duration::from_secs(300);
+    }
+
     pub fn skip_phase(&mut self) {
         self.finish_phase(Outcome::Skipped);
     }
@@ -1021,6 +1028,24 @@ mod tests {
     fn test_progress_zero_duration() {
         let app = App::with_config(0, 5, 15, 4);
         assert_eq!(app.progress(), 1.0);
+    }
+
+    #[test]
+    fn test_distraction_adds_pause() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        assert_eq!(app.pause_accumulated, Duration::ZERO);
+        app.distraction();
+        assert_eq!(app.pause_accumulated, Duration::from_secs(300));
+        app.distraction();
+        assert_eq!(app.pause_accumulated, Duration::from_secs(600));
+    }
+
+    #[test]
+    fn test_distraction_noop_during_break() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.skip_phase(); // Work -> Break
+        app.distraction();
+        assert_eq!(app.pause_accumulated, Duration::ZERO);
     }
 
     // -- Overtime & confirm_break --
