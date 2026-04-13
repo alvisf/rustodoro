@@ -93,6 +93,7 @@ fn draw_setup(frame: &mut Frame, app: &App) {
             ("↑↓", "navigate"),
             ("←→", "adjust"),
             ("Enter", "start"),
+            ("Esc", "back"),
             ("q", "quit"),
         ],
     );
@@ -183,6 +184,7 @@ fn draw_todo_list(frame: &mut Frame, app: &App) {
             ("d", "del"),
             ("space", "done"),
             ("n", "custom"),
+            ("l", "log"),
             ("Esc", "skip"),
         ]
     } else {
@@ -192,6 +194,7 @@ fn draw_todo_list(frame: &mut Frame, app: &App) {
             ("a", "add"),
             ("e", "edit"),
             ("d", "del"),
+            ("l", "log"),
             ("Esc", "back"),
         ]
     };

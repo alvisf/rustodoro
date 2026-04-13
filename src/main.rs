@@ -42,7 +42,8 @@ fn main() -> io::Result<()> {
                     KeyCode::Left | KeyCode::Char('h') => app.decrement_field(),
                     KeyCode::Right | KeyCode::Char('l') => app.increment_field(),
                     KeyCode::Enter => app.start_timer(),
-                    KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
+                    KeyCode::Esc => app.open_todo_list(true),
+                    KeyCode::Char('q') => app.should_quit = true,
                     _ => {}
                 },
                 Screen::TodoList => {
@@ -64,6 +65,7 @@ fn main() -> io::Result<()> {
                             KeyCode::Char('d') => app.todo_delete(),
                             KeyCode::Char(' ') => app.todo_toggle(),
                             KeyCode::Char('n') => app.todo_custom_task(),
+                            KeyCode::Char('l') => app.open_daily_log(),
                             KeyCode::Esc => app.todo_back(),
                             KeyCode::Char('q') => app.should_quit = true,
                             _ => {}
@@ -85,7 +87,7 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('s') | KeyCode::Char('n') => app.skip_phase(),
                     KeyCode::Char('d') => app.distraction(),
                     KeyCode::Char('w') => app.extend_work(),
-                    KeyCode::Char('l') => app.screen = Screen::DailyLog,
+                    KeyCode::Char('l') => app.open_daily_log(),
                     KeyCode::Char('t') => app.open_todo_list(false),
                     KeyCode::Enter => app.confirm_break(),
                     _ => {}
@@ -98,7 +100,7 @@ fn main() -> io::Result<()> {
                     _ => {}
                 },
                 Screen::DailyLog => match code {
-                    KeyCode::Esc | KeyCode::Backspace => app.screen = Screen::Timer,
+                    KeyCode::Esc | KeyCode::Backspace => app.close_daily_log(),
                     KeyCode::Char('q') => app.should_quit = true,
                     _ => {}
                 },
@@ -118,7 +120,7 @@ fn main() -> io::Result<()> {
     terminal::disable_raw_mode()?;
     io::stdout().execute(LeaveAlternateScreen)?;
 
-    if !matches!(app.screen, Screen::Setup) {
+    if app.completed_work_sessions() > 0 {
         let completed = app.completed_work_sessions();
         println!(
             "👋 Done! Completed {} work session{}. Great job!",

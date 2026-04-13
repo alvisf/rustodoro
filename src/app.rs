@@ -101,6 +101,7 @@ pub struct App {
     pub todo_mode: TodoMode,
     pub todo_input_buffer: String,
     pub todo_picking: bool,
+    pub return_from_log: Screen,
     phase_start_wall: String,
     phase_start_wall_12h: String,
     overtime_notified: bool,
@@ -117,6 +118,7 @@ impl App {
         );
         app.persist = true;
         app.daily_stats = store::load_daily_stats();
+        app.todos = store::load_todos();
         app
     }
 
@@ -154,7 +156,7 @@ impl App {
             pause_accumulated: Duration::ZERO,
             pause_start: None,
             history: Vec::new(),
-            screen: Screen::Setup,
+            screen: Screen::TodoList,
             selected_field: 0,
             daily_stats: BTreeMap::new(),
             persist: false,
@@ -169,7 +171,8 @@ impl App {
             todo_cursor: 0,
             todo_mode: TodoMode::Normal,
             todo_input_buffer: String::new(),
-            todo_picking: false,
+            todo_picking: true,
+            return_from_log: Screen::TodoList,
             phase_start_wall: String::new(),
             phase_start_wall_12h: String::new(),
             overtime_notified: false,
@@ -216,7 +219,7 @@ impl App {
             )
             .ok();
         }
-        self.open_todo_list(true);
+        self.begin_work_phase();
     }
 
     // -- Task input --
@@ -232,13 +235,12 @@ impl App {
     pub fn submit_task(&mut self) {
         self.current_task = self.task_input_buffer.trim().to_string();
         self.task_input_buffer.clear();
-        self.begin_work_phase();
+        self.screen = Screen::Setup;
     }
 
     pub fn skip_task_input(&mut self) {
-        self.current_task = String::new();
         self.task_input_buffer.clear();
-        self.begin_work_phase();
+        self.open_todo_list(true);
     }
 
     fn begin_work_phase(&mut self) {
@@ -617,7 +619,7 @@ impl App {
         }
         if self.todo_picking {
             self.current_task = self.todos[self.todo_cursor].text.clone();
-            self.begin_work_phase();
+            self.screen = Screen::Setup;
         } else {
             self.todo_toggle();
         }
@@ -625,8 +627,7 @@ impl App {
 
     pub fn todo_back(&mut self) {
         if self.todo_picking {
-            self.current_task = String::new();
-            self.begin_work_phase();
+            self.should_quit = true;
         } else {
             self.screen = Screen::Timer;
         }
@@ -638,6 +639,15 @@ impl App {
         }
         self.task_input_buffer.clear();
         self.screen = Screen::TaskInput;
+    }
+
+    pub fn open_daily_log(&mut self) {
+        self.return_from_log = self.screen;
+        self.screen = Screen::DailyLog;
+    }
+
+    pub fn close_daily_log(&mut self) {
+        self.screen = self.return_from_log;
     }
 
     fn persist_todos(&self) {
@@ -835,7 +845,7 @@ mod tests {
         assert_eq!(app.sessions_before_long, 4);
         assert_eq!(app.session, 1);
         assert_eq!(app.phase, Phase::Work);
-        assert_eq!(app.screen, Screen::Setup);
+        assert_eq!(app.screen, Screen::TodoList);
         assert_eq!(app.selected_field, 0);
         assert!(app.current_task.is_empty());
         assert!(app.task_input_buffer.is_empty());
@@ -900,11 +910,11 @@ mod tests {
     }
 
     #[test]
-    fn test_start_timer_goes_to_todo_list() {
+    fn test_start_timer_begins_work() {
         let mut app = App::with_config(25, 5, 15, 4);
-        assert_eq!(app.screen, Screen::Setup);
-        app.start_timer();
         assert_eq!(app.screen, Screen::TodoList);
+        app.start_timer();
+        assert_eq!(app.screen, Screen::Timer);
     }
 
     // -- Task input --
@@ -923,21 +933,18 @@ mod tests {
     #[test]
     fn test_submit_task_starts_timer() {
         let mut app = App::new();
-        app.start_timer();
         app.task_input_char('X');
         app.submit_task();
-        assert_eq!(app.screen, Screen::Timer);
+        assert_eq!(app.screen, Screen::Setup);
         assert_eq!(app.current_task, "X");
         assert!(app.task_input_buffer.is_empty());
     }
 
     #[test]
-    fn test_skip_task_input_starts_timer() {
+    fn test_skip_task_input_returns_to_todo() {
         let mut app = App::new();
-        app.start_timer();
         app.skip_task_input();
-        assert_eq!(app.screen, Screen::Timer);
-        assert!(app.current_task.is_empty());
+        assert_eq!(app.screen, Screen::TodoList);
     }
 
     // -- Timer logic --
@@ -1100,16 +1107,9 @@ mod tests {
 
     #[test]
     fn test_end_task_goes_to_notes_input() {
-        let mut app = App::with_config(25, 5, 15, 4);
-        app.start_timer();
-        app.submit_task();
-        assert_eq!(app.screen, Screen::Timer);
-        // With 0-duration work_secs=25min, elapsed > 0 only after real time.
-        // Use with_config(0, ...) so elapsed >= total immediately.
         let mut app = App::with_config(0, 5, 15, 4);
+        app.current_task = "X".to_string();
         app.start_timer();
-        app.task_input_char('X');
-        app.submit_task();
         app.end_task();
         assert_eq!(app.screen, Screen::NotesInput);
         assert_eq!(app.history.len(), 1);
@@ -1130,7 +1130,6 @@ mod tests {
     fn test_submit_notes_goes_to_break() {
         let mut app = App::with_config(0, 5, 15, 4);
         app.start_timer();
-        app.submit_task();
         app.end_task();
         assert_eq!(app.screen, Screen::NotesInput);
         app.notes_input_char('g');
@@ -1147,7 +1146,6 @@ mod tests {
     fn test_skip_notes_goes_to_break() {
         let mut app = App::with_config(0, 5, 15, 4);
         app.start_timer();
-        app.submit_task();
         app.end_task();
         app.skip_notes();
         assert_eq!(app.phase, Phase::Break);
@@ -1159,8 +1157,7 @@ mod tests {
 
     #[test]
     fn test_open_todo_list_picking() {
-        let mut app = App::with_config(25, 5, 15, 4);
-        app.start_timer();
+        let app = App::with_config(25, 5, 15, 4);
         assert_eq!(app.screen, Screen::TodoList);
         assert!(app.todo_picking);
     }
@@ -1238,7 +1235,7 @@ mod tests {
         });
         app.todo_select();
         assert_eq!(app.current_task, "My task");
-        assert_eq!(app.screen, Screen::Timer);
+        assert_eq!(app.screen, Screen::Setup);
     }
 
     #[test]
@@ -1260,12 +1257,11 @@ mod tests {
     }
 
     #[test]
-    fn test_todo_back_picking_starts_with_no_task() {
+    fn test_todo_back_picking_quits() {
         let mut app = App::with_config(25, 5, 15, 4);
         app.todo_picking = true;
         app.todo_back();
-        assert_eq!(app.screen, Screen::Timer);
-        assert!(app.current_task.is_empty());
+        assert!(app.should_quit);
     }
 
     #[test]
@@ -1290,7 +1286,6 @@ mod tests {
     fn test_help_others_goes_to_notes_input() {
         let mut app = App::with_config(0, 5, 15, 4);
         app.start_timer();
-        app.submit_task();
         app.help_others();
         assert_eq!(app.screen, Screen::NotesInput);
         assert!(app.pending_is_helping);
@@ -1302,7 +1297,6 @@ mod tests {
     fn test_help_others_tracks_helping_secs() {
         let mut app = App::with_config(0, 5, 15, 4);
         app.start_timer();
-        app.submit_task();
         app.help_others();
         assert_eq!(app.today_work_secs(), 0);
     }
