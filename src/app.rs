@@ -81,6 +81,7 @@ pub struct App {
     pub session: u32,
     pub paused: bool,
     pub should_quit: bool,
+    pub confirm_quit: bool,
     phase_start: Instant,
     pause_accumulated: Duration,
     pause_start: Option<Instant>,
@@ -152,6 +153,7 @@ impl App {
             session: 1,
             paused: false,
             should_quit: false,
+            confirm_quit: false,
             phase_start: Instant::now(),
             pause_accumulated: Duration::ZERO,
             pause_start: None,
@@ -648,6 +650,23 @@ impl App {
 
     pub fn close_daily_log(&mut self) {
         self.screen = self.return_from_log;
+    }
+
+    pub fn request_quit(&mut self) {
+        self.confirm_quit = true;
+    }
+
+    pub fn cancel_quit(&mut self) {
+        self.confirm_quit = false;
+    }
+
+    pub fn confirm_quit_end_session(&mut self) {
+        self.confirm_quit = false;
+        self.end_task();
+    }
+
+    pub fn has_active_work_session(&self) -> bool {
+        self.phase == Phase::Work && matches!(self.screen, Screen::Timer | Screen::DailyLog)
     }
 
     fn persist_todos(&self) {
@@ -1307,5 +1326,45 @@ mod tests {
         app.skip_phase();
         app.help_others();
         assert_ne!(app.screen, Screen::NotesInput);
+    }
+
+    // -- Quit confirmation --
+
+    #[test]
+    fn test_request_quit_sets_flag() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        assert!(!app.confirm_quit);
+        app.request_quit();
+        assert!(app.confirm_quit);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn test_cancel_quit_clears_flag() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.request_quit();
+        app.cancel_quit();
+        assert!(!app.confirm_quit);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn test_confirm_quit_end_session_during_work() {
+        let mut app = App::with_config(0, 5, 15, 4);
+        app.start_timer();
+        app.request_quit();
+        app.confirm_quit_end_session();
+        assert!(!app.confirm_quit);
+        assert_eq!(app.screen, Screen::NotesInput);
+    }
+
+    #[test]
+    fn test_has_active_work_session() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        assert!(!app.has_active_work_session());
+        app.start_timer();
+        assert!(app.has_active_work_session());
+        app.skip_phase(); // Work -> Break
+        assert!(!app.has_active_work_session());
     }
 }

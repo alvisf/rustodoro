@@ -26,6 +26,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::Timer => draw_timer_screen(frame, app),
         Screen::DailyLog => draw_daily_log(frame, app),
     }
+
+    if app.confirm_quit {
+        draw_quit_dialog(frame, app);
+    }
 }
 
 // ── Setup screen ──────────────────────────────────────────
@@ -699,6 +703,65 @@ fn draw_daily_log(frame: &mut Frame, app: &App) {
     frame.render_widget(list, inner);
 
     draw_controls(frame, chunks[1], &[("Esc", "back"), ("q", "quit")]);
+}
+
+// ── Quit confirmation dialog ─────────────────────────────
+
+fn draw_quit_dialog(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    let dialog_w: u16 = 40;
+    let dialog_h: u16 = if app.has_active_work_session() { 9 } else { 7 };
+    let x = area.width.saturating_sub(dialog_w) / 2;
+    let y = area.height.saturating_sub(dialog_h) / 2;
+    let dialog_area = Rect::new(x, y, dialog_w.min(area.width), dialog_h.min(area.height));
+
+    // Clear background
+    let blank = Paragraph::new("");
+    frame.render_widget(blank, dialog_area);
+
+    let block = Block::default()
+        .title(" Quit? ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+
+    let inner = block.inner(dialog_area);
+    frame.render_widget(block, dialog_area);
+
+    let key_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let text_style = Style::default().fg(Color::White);
+    let dim_style = Style::default().fg(Color::DarkGray);
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Are you sure?",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  q/y ", key_style),
+            Span::styled("Quit", text_style),
+        ]),
+    ];
+
+    if app.has_active_work_session() {
+        lines.push(Line::from(vec![
+            Span::styled("    e ", key_style),
+            Span::styled("End session", text_style),
+        ]));
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled("  Esc ", key_style),
+        Span::styled("Cancel", dim_style),
+    ]));
+
+    let para = Paragraph::new(lines).alignment(Alignment::Center);
+    frame.render_widget(para, inner);
 }
 
 // ── Shared controls bar ──────────────────────────────────

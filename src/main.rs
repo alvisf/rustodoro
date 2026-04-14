@@ -35,6 +35,16 @@ fn main() -> io::Result<()> {
                 ..
             }) = event::read()?
         {
+            if app.confirm_quit {
+                match code {
+                    KeyCode::Char('q') | KeyCode::Char('y') => app.should_quit = true,
+                    KeyCode::Char('e') => app.confirm_quit_end_session(),
+                    KeyCode::Esc | KeyCode::Char('n') => app.cancel_quit(),
+                    _ => {}
+                }
+                continue;
+            }
+
             match app.screen {
                 Screen::Setup => match code {
                     KeyCode::Up | KeyCode::Char('k') => app.prev_field(),
@@ -43,7 +53,7 @@ fn main() -> io::Result<()> {
                     KeyCode::Right | KeyCode::Char('l') => app.increment_field(),
                     KeyCode::Enter => app.start_timer(),
                     KeyCode::Esc => app.open_todo_list(true),
-                    KeyCode::Char('q') => app.should_quit = true,
+                    KeyCode::Char('q') => app.request_quit(),
                     _ => {}
                 },
                 Screen::TodoList => {
@@ -67,7 +77,7 @@ fn main() -> io::Result<()> {
                             KeyCode::Char('n') => app.todo_custom_task(),
                             KeyCode::Char('l') => app.open_daily_log(),
                             KeyCode::Esc => app.todo_back(),
-                            KeyCode::Char('q') => app.should_quit = true,
+                            KeyCode::Char('q') => app.request_quit(),
                             _ => {}
                         }
                     }
@@ -80,7 +90,7 @@ fn main() -> io::Result<()> {
                     _ => {}
                 },
                 Screen::Timer => match code {
-                    KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
+                    KeyCode::Char('q') | KeyCode::Esc => app.request_quit(),
                     KeyCode::Char(' ') => app.toggle_pause(),
                     KeyCode::Char('e') => app.end_task(),
                     KeyCode::Char('h') => app.help_others(),
@@ -101,7 +111,7 @@ fn main() -> io::Result<()> {
                 },
                 Screen::DailyLog => match code {
                     KeyCode::Esc | KeyCode::Backspace => app.close_daily_log(),
-                    KeyCode::Char('q') => app.should_quit = true,
+                    KeyCode::Char('q') => app.request_quit(),
                     _ => {}
                 },
             }
