@@ -845,11 +845,12 @@ impl App {
     pub fn today_work_secs(&self) -> u64 {
         let today = store::local_date_str();
         let saved = self.daily_stats.get(&today).map_or(0, |s| s.work_secs);
-        let current = if self.phase == Phase::Work && self.screen == Screen::Timer {
-            self.elapsed_secs()
-        } else {
-            0
-        };
+        let current =
+            if self.phase == Phase::Work && self.screen == Screen::Timer && !self.manual_break {
+                self.elapsed_secs()
+            } else {
+                0
+            };
         saved + current
     }
 

@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, block::Title},
 };
 
 use crate::app::{App, Outcome, Phase, Screen, TodoMode, format_duration};
@@ -398,6 +398,7 @@ fn draw_timer(frame: &mut Frame, area: Rect, app: &App) {
 
     let block = Block::default()
         .title(" 🍅 Pomodoro Timer ")
+        .title(energy_bar_title(app))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(color));
 
@@ -815,6 +816,32 @@ fn draw_quit_dialog(frame: &mut Frame, app: &App) {
 
     let para = Paragraph::new(lines).alignment(Alignment::Center);
     frame.render_widget(para, inner);
+}
+
+// ── Energy bar ───────────────────────────────────────────
+
+fn energy_bar_title(app: &App) -> Title<'static> {
+    let max_bars: u64 = 4;
+    let total_secs = app.today_work_secs() + app.today_helping_secs();
+    let hours_worked = total_secs / 3600;
+    let remaining = max_bars.saturating_sub(hours_worked);
+
+    let color = match remaining {
+        3..=u64::MAX => Color::Green,
+        2 => Color::Yellow,
+        _ => Color::Red,
+    };
+
+    let filled = "█".repeat(remaining as usize);
+    let empty = "░".repeat((max_bars - remaining) as usize);
+
+    Title::from(Line::from(vec![
+        Span::styled("⚡", Style::default().fg(color)),
+        Span::styled(filled, Style::default().fg(color)),
+        Span::styled(empty, Style::default().fg(Color::DarkGray)),
+        Span::raw(" "),
+    ]))
+    .alignment(Alignment::Right)
 }
 
 // ── Shared controls bar ──────────────────────────────────
