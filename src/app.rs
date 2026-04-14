@@ -362,7 +362,11 @@ impl App {
     }
 
     pub fn shorten_work(&mut self) {
-        self.work_secs = self.work_secs.saturating_sub(300).max(60);
+        if self.phase != Phase::Work {
+            return;
+        }
+        let skip = 300.min(self.remaining_secs().saturating_sub(60));
+        self.pause_accumulated += Duration::from_secs(skip);
     }
 
     pub fn skip_phase(&mut self) {
