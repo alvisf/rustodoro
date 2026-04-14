@@ -103,6 +103,7 @@ pub struct App {
     pub todo_input_buffer: String,
     pub todo_picking: bool,
     pub return_from_log: Screen,
+    pub manual_break: bool,
     phase_start_wall: String,
     phase_start_wall_12h: String,
     overtime_notified: bool,
@@ -175,6 +176,7 @@ impl App {
             todo_input_buffer: String::new(),
             todo_picking: true,
             return_from_log: Screen::TodoList,
+            manual_break: false,
             phase_start_wall: String::new(),
             phase_start_wall_12h: String::new(),
             overtime_notified: false,
@@ -277,7 +279,7 @@ impl App {
             .elapsed()
             .saturating_sub(total_paused)
             .as_secs();
-        if self.phase == Phase::Work {
+        if self.phase == Phase::Work || self.manual_break {
             raw
         } else {
             raw.min(self.phase_total_secs())
@@ -297,6 +299,9 @@ impl App {
     }
 
     pub fn progress(&self) -> f64 {
+        if self.manual_break {
+            return 0.0;
+        }
         let total = self.phase_total_secs() as f64;
         if total == 0.0 {
             return 1.0;
@@ -305,7 +310,11 @@ impl App {
     }
 
     pub fn tick(&mut self) {
-        if !self.paused && self.remaining_secs() == 0 && self.phase != Phase::Work {
+        if !self.paused
+            && self.remaining_secs() == 0
+            && self.phase != Phase::Work
+            && !self.manual_break
+        {
             self.finish_phase(Outcome::Completed);
         }
 
@@ -666,7 +675,23 @@ impl App {
     }
 
     pub fn has_active_work_session(&self) -> bool {
-        self.phase == Phase::Work && matches!(self.screen, Screen::Timer | Screen::DailyLog)
+        self.phase == Phase::Work
+            && !self.manual_break
+            && matches!(self.screen, Screen::Timer | Screen::DailyLog)
+    }
+
+    pub fn start_manual_break(&mut self) {
+        self.manual_break = true;
+        self.screen = Screen::Timer;
+        self.phase_start = Instant::now();
+        self.pause_accumulated = Duration::ZERO;
+        self.pause_start = None;
+        self.paused = false;
+    }
+
+    pub fn end_manual_break(&mut self) {
+        self.manual_break = false;
+        self.open_todo_list(true);
     }
 
     fn persist_todos(&self) {
@@ -1366,5 +1391,32 @@ mod tests {
         assert!(app.has_active_work_session());
         app.skip_phase(); // Work -> Break
         assert!(!app.has_active_work_session());
+    }
+
+    // -- Manual break --
+
+    #[test]
+    fn test_start_manual_break() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.start_manual_break();
+        assert!(app.manual_break);
+        assert_eq!(app.screen, Screen::Timer);
+        assert!(!app.has_active_work_session());
+    }
+
+    #[test]
+    fn test_end_manual_break() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.start_manual_break();
+        app.end_manual_break();
+        assert!(!app.manual_break);
+        assert_eq!(app.screen, Screen::TodoList);
+    }
+
+    #[test]
+    fn test_manual_break_progress_zero() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.start_manual_break();
+        assert_eq!(app.progress(), 0.0);
     }
 }

@@ -189,6 +189,7 @@ fn draw_todo_list(frame: &mut Frame, app: &App) {
             ("space", "done"),
             ("n", "custom"),
             ("l", "log"),
+            ("b", "break"),
             ("Esc", "skip"),
         ]
     } else {
@@ -199,6 +200,7 @@ fn draw_todo_list(frame: &mut Frame, app: &App) {
             ("e", "edit"),
             ("d", "del"),
             ("l", "log"),
+            ("b", "break"),
             ("Esc", "back"),
         ]
     };
@@ -355,27 +357,40 @@ fn draw_timer_screen(frame: &mut Frame, app: &App) {
     draw_stats(frame, chunks[1], app);
     draw_log(frame, chunks[2], app);
 
-    let pause_label: &str = if app.paused { "resume" } else { "pause" };
-    let mut bindings: Vec<(&str, &str)> = vec![("space", pause_label)];
-    if app.phase == Phase::Work {
-        bindings.push(("Enter", "break"));
-        bindings.push(("e", "end task"));
-        bindings.push(("h", "helping"));
-    }
-    bindings.extend([
-        ("s", "skip"),
-        ("d", "-5m"),
-        ("w", "wrap up"),
-        ("t", "todos"),
-        ("l", "log"),
-        ("q", "quit"),
-    ]);
+    let bindings: Vec<(&str, &str)> = if app.manual_break {
+        let pause_label: &str = if app.paused { "resume" } else { "pause" };
+        vec![
+            ("Enter", "end break"),
+            ("space", pause_label),
+            ("l", "log"),
+            ("q", "quit"),
+        ]
+    } else {
+        let pause_label: &str = if app.paused { "resume" } else { "pause" };
+        let mut b: Vec<(&str, &str)> = vec![("space", pause_label)];
+        if app.phase == Phase::Work {
+            b.push(("Enter", "break"));
+            b.push(("e", "end task"));
+            b.push(("h", "helping"));
+        }
+        b.extend([
+            ("s", "skip"),
+            ("d", "-5m"),
+            ("w", "wrap up"),
+            ("t", "todos"),
+            ("l", "log"),
+            ("q", "quit"),
+        ]);
+        b
+    };
     draw_controls(frame, chunks[3], &bindings);
 }
 
 fn draw_timer(frame: &mut Frame, area: Rect, app: &App) {
     let overtime = app.is_overtime();
-    let color = if app.paused || overtime {
+    let color = if app.manual_break {
+        Color::Green
+    } else if app.paused || overtime {
         Color::Yellow
     } else {
         phase_color(app.phase)
@@ -398,15 +413,25 @@ fn draw_timer(frame: &mut Frame, area: Rect, app: &App) {
         ])
         .split(inner);
 
-    let phase_label = format!("{} {}", app.phase.icon(), app.phase.label());
-    let session_label = format!("Session #{}", app.session);
-    let time_str = if overtime {
+    let (phase_label, session_label) = if app.manual_break {
+        ("☕ BREAK".to_string(), "Take your time".to_string())
+    } else {
+        (
+            format!("{} {}", app.phase.icon(), app.phase.label()),
+            format!("Session #{}", app.session),
+        )
+    };
+    let time_str = if app.manual_break {
+        format_duration(app.elapsed_secs())
+    } else if overtime {
         format!("+{}", format_duration(app.overtime_secs()))
     } else {
         format_duration(app.remaining_secs())
     };
 
-    let task_line = if app.phase == Phase::Work && !app.current_task.is_empty() {
+    let task_line = if app.manual_break {
+        Line::from("")
+    } else if app.phase == Phase::Work && !app.current_task.is_empty() {
         Line::from(Span::styled(
             app.current_task.clone(),
             Style::default().fg(Color::DarkGray),
@@ -415,7 +440,19 @@ fn draw_timer(frame: &mut Frame, area: Rect, app: &App) {
         Line::from("")
     };
 
-    let status_line = if app.paused {
+    let status_line = if app.manual_break && app.paused {
+        Line::from(Span::styled(
+            "⏸  PAUSED",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))
+    } else if app.manual_break {
+        Line::from(Span::styled(
+            "Press Enter when ready",
+            Style::default().fg(Color::DarkGray),
+        ))
+    } else if app.paused {
         Line::from(Span::styled(
             "⏸  PAUSED",
             Style::default()
@@ -524,12 +561,18 @@ fn draw_stats(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
     let overtime = app.is_overtime();
-    let color = if app.paused || overtime {
+    let color = if app.manual_break {
+        Color::Green
+    } else if app.paused || overtime {
         Color::Yellow
     } else {
         phase_color(app.phase)
     };
-    let (status, icon) = if app.paused {
+    let (status, icon) = if app.manual_break && app.paused {
+        ("paused", "⏸")
+    } else if app.manual_break {
+        ("break", "☕")
+    } else if app.paused {
         ("paused", "⏸")
     } else if overtime {
         ("overtime", "⏰")
@@ -537,37 +580,47 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
         ("running", "▶")
     };
 
-    let mut spans = vec![
-        Span::styled(format!("  {icon} "), Style::default().fg(color)),
-        Span::styled(
-            format!("#{:<3} ", app.session),
-            Style::default().fg(Color::White),
-        ),
-        Span::styled(
-            format!("{:<11}", app.phase.label()),
-            Style::default().fg(color),
-        ),
-        Span::raw(if overtime {
-            format!(
-                "+{} / {}  ",
-                format_duration(app.overtime_secs()),
-                format_duration(app.phase_total_secs()),
-            )
-        } else {
-            format!(
-                "{} / {}  ",
-                format_duration(app.remaining_secs()),
-                format_duration(app.phase_total_secs()),
-            )
-        }),
-        Span::styled(status, Style::default().fg(color)),
-    ];
-    if app.phase == Phase::Work && !app.current_task.is_empty() {
-        spans.push(Span::styled(
-            format!("  {}", app.current_task),
-            Style::default().fg(Color::DarkGray),
-        ));
-    }
+    let spans = if app.manual_break {
+        vec![
+            Span::styled(format!("  {icon} "), Style::default().fg(color)),
+            Span::styled(format!("{:<11}", "BREAK"), Style::default().fg(color)),
+            Span::raw(format!("{}  ", format_duration(app.elapsed_secs()))),
+            Span::styled(status, Style::default().fg(color)),
+        ]
+    } else {
+        let mut s = vec![
+            Span::styled(format!("  {icon} "), Style::default().fg(color)),
+            Span::styled(
+                format!("#{:<3} ", app.session),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(
+                format!("{:<11}", app.phase.label()),
+                Style::default().fg(color),
+            ),
+            Span::raw(if overtime {
+                format!(
+                    "+{} / {}  ",
+                    format_duration(app.overtime_secs()),
+                    format_duration(app.phase_total_secs()),
+                )
+            } else {
+                format!(
+                    "{} / {}  ",
+                    format_duration(app.remaining_secs()),
+                    format_duration(app.phase_total_secs()),
+                )
+            }),
+            Span::styled(status, Style::default().fg(color)),
+        ];
+        if app.phase == Phase::Work && !app.current_task.is_empty() {
+            s.push(Span::styled(
+                format!("  {}", app.current_task),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        s
+    };
     let current_item = ListItem::new(Line::from(spans));
 
     let history_items: Vec<ListItem> = app

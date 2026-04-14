@@ -76,6 +76,7 @@ fn main() -> io::Result<()> {
                             KeyCode::Char(' ') => app.todo_toggle(),
                             KeyCode::Char('n') => app.todo_custom_task(),
                             KeyCode::Char('l') => app.open_daily_log(),
+                            KeyCode::Char('b') => app.start_manual_break(),
                             KeyCode::Esc => app.todo_back(),
                             KeyCode::Char('q') => app.request_quit(),
                             _ => {}
@@ -90,6 +91,13 @@ fn main() -> io::Result<()> {
                     _ => {}
                 },
                 Screen::Timer => match code {
+                    _ if app.manual_break => match code {
+                        KeyCode::Enter => app.end_manual_break(),
+                        KeyCode::Char(' ') => app.toggle_pause(),
+                        KeyCode::Char('l') => app.open_daily_log(),
+                        KeyCode::Char('q') | KeyCode::Esc => app.request_quit(),
+                        _ => {}
+                    },
                     KeyCode::Char('q') | KeyCode::Esc => app.request_quit(),
                     KeyCode::Char(' ') => app.toggle_pause(),
                     KeyCode::Char('e') => app.end_task(),
