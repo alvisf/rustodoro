@@ -96,7 +96,7 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('h') => app.help_others(),
                     KeyCode::Char('s') | KeyCode::Char('n') => app.skip_phase(),
                     KeyCode::Char('d') => app.distraction(),
-                    KeyCode::Char('w') => app.extend_work(),
+                    KeyCode::Char('w') => app.shorten_work(),
                     KeyCode::Char('l') => app.open_daily_log(),
                     KeyCode::Char('t') => app.open_todo_list(false),
                     KeyCode::Enter => app.confirm_break(),
