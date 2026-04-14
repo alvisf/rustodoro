@@ -107,6 +107,7 @@ pub struct App {
     phase_start_wall: String,
     phase_start_wall_12h: String,
     overtime_notified: bool,
+    last_date: String,
 }
 
 impl App {
@@ -121,6 +122,7 @@ impl App {
         app.persist = true;
         app.daily_stats = store::load_daily_stats();
         app.todos = store::load_todos();
+        app.last_date = store::local_date_str();
         app
     }
 
@@ -180,6 +182,7 @@ impl App {
             phase_start_wall: String::new(),
             phase_start_wall_12h: String::new(),
             overtime_notified: false,
+            last_date: String::new(),
         }
     }
 
@@ -310,6 +313,17 @@ impl App {
     }
 
     pub fn tick(&mut self) {
+        if self.persist {
+            let today = store::local_date_str();
+            if !self.last_date.is_empty() && self.last_date != today {
+                self.session = 1;
+                self.history.clear();
+                self.daily_stats = store::load_daily_stats();
+                self.todos = store::load_todos();
+            }
+            self.last_date = today;
+        }
+
         if !self.paused
             && self.remaining_secs() == 0
             && self.phase != Phase::Work
@@ -405,7 +419,7 @@ impl App {
                 }
             }
         } else {
-            self.session += breaks_to_skip;
+            self.session += 1;
             self.reset_timer();
             if self.screen == Screen::Timer {
                 self.open_todo_list(true);
