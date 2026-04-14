@@ -832,16 +832,20 @@ fn energy_bar_title(app: &App) -> Title<'static> {
         _ => Color::Red,
     };
 
-    let filled = "█".repeat(remaining as usize);
-    let empty = "░".repeat((max_bars - remaining) as usize);
+    let mut spans = vec![Span::styled("⚡ ", Style::default().fg(color))];
+    for i in 0..max_bars {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        if i < remaining {
+            spans.push(Span::styled("▐██▌", Style::default().fg(color)));
+        } else {
+            spans.push(Span::styled("▐░░▌", Style::default().fg(Color::DarkGray)));
+        }
+    }
+    spans.push(Span::raw(" "));
 
-    Title::from(Line::from(vec![
-        Span::styled("⚡", Style::default().fg(color)),
-        Span::styled(filled, Style::default().fg(color)),
-        Span::styled(empty, Style::default().fg(Color::DarkGray)),
-        Span::raw(" "),
-    ]))
-    .alignment(Alignment::Right)
+    Title::from(Line::from(spans)).alignment(Alignment::Right)
 }
 
 // ── Shared controls bar ──────────────────────────────────
