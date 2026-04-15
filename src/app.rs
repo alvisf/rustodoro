@@ -422,31 +422,32 @@ impl App {
         let break_dur = self.break_secs.max(1);
         let breaks_to_skip = (overtime / break_dur) as u32;
 
-        if breaks_to_skip == 0 {
+        self.advance_phase();
+
+        if breaks_to_skip > 0 && self.phase == Phase::Break {
             self.advance_phase();
-            self.reset_timer();
-            if self.persist {
-                let msg = match self.phase {
-                    Phase::LongBreak => {
-                        format!("Great work! Relax for {} min", self.long_break_secs / 60,)
-                    }
-                    Phase::Break => format!("Relax for {} min", self.break_secs / 60,),
-                    _ => String::new(),
-                };
-                let title = match self.phase {
-                    Phase::LongBreak => "🌴 Long break!",
-                    Phase::Break => "☕ Break time!",
-                    _ => "",
-                };
-                if !title.is_empty() {
-                    store::send_notification(title, &msg);
-                }
-            }
-        } else {
-            self.session += 1;
             self.reset_timer();
             if self.screen == Screen::Timer {
                 self.open_todo_list(true);
+            }
+            return;
+        }
+
+        self.reset_timer();
+        if self.persist {
+            let (title, msg) = match self.phase {
+                Phase::LongBreak => (
+                    "🌴 Long break!",
+                    format!("Great work! Relax for {} min", self.long_break_secs / 60),
+                ),
+                Phase::Break => (
+                    "☕ Break time!",
+                    format!("Relax for {} min", self.break_secs / 60),
+                ),
+                _ => ("", String::new()),
+            };
+            if !title.is_empty() {
+                store::send_notification(title, &msg);
             }
         }
     }
@@ -1175,6 +1176,18 @@ mod tests {
         app.confirm_break(); // Should do nothing
         assert_eq!(app.phase, Phase::Break);
         assert_eq!(app.session, session);
+    }
+
+    #[test]
+    fn test_confirm_break_never_skips_long_break() {
+        let mut app = App::with_config(0, 1, 15, 2);
+        // Session 1 Work → Break (not long since 1 is not multiple of 2)
+        app.confirm_break();
+        assert_eq!(app.phase, Phase::Break);
+        app.skip_phase(); // Break → Work (session 2)
+        // Session 2 Work with 0-dur → overtime triggers breaks_to_skip > 0
+        app.confirm_break();
+        assert_eq!(app.phase, Phase::LongBreak);
     }
 
     #[test]
