@@ -128,7 +128,11 @@ fn draw_task_input(frame: &mut Frame, app: &App) {
     }
 
     lines.push(Line::from(Span::styled(
-        "What are you working on?",
+        if app.renaming_task {
+            "Rename current task:"
+        } else {
+            "What are you working on?"
+        },
         Style::default()
             .fg(Color::White)
             .add_modifier(Modifier::BOLD),
@@ -377,6 +381,7 @@ fn draw_timer_screen(frame: &mut Frame, app: &App) {
             ("s", "skip"),
             ("d", "-5m"),
             ("w", "wrap up"),
+            ("r", "rename"),
             ("t", "todos"),
             ("l", "log"),
             ("q", "quit"),

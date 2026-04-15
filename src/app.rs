@@ -93,6 +93,7 @@ pub struct App {
     pub current_task: String,
     pub task_input_buffer: String,
     pub notes_input_buffer: String,
+    pub renaming_task: bool,
     pending_end_secs: u64,
     pending_end_wall: String,
     pending_end_wall_12h: String,
@@ -168,6 +169,7 @@ impl App {
             current_task: String::new(),
             task_input_buffer: String::new(),
             notes_input_buffer: String::new(),
+            renaming_task: false,
             pending_end_secs: 0,
             pending_end_wall: String::new(),
             pending_end_wall_12h: String::new(),
@@ -242,12 +244,22 @@ impl App {
     pub fn submit_task(&mut self) {
         self.current_task = self.task_input_buffer.trim().to_string();
         self.task_input_buffer.clear();
-        self.screen = Screen::Setup;
+        if self.renaming_task {
+            self.renaming_task = false;
+            self.screen = Screen::Timer;
+        } else {
+            self.screen = Screen::Setup;
+        }
     }
 
     pub fn skip_task_input(&mut self) {
         self.task_input_buffer.clear();
-        self.open_todo_list(true);
+        if self.renaming_task {
+            self.renaming_task = false;
+            self.screen = Screen::Timer;
+        } else {
+            self.open_todo_list(true);
+        }
     }
 
     fn begin_work_phase(&mut self) {
@@ -366,6 +378,15 @@ impl App {
             return;
         }
         self.work_secs = self.work_secs.saturating_sub(300).max(60);
+    }
+
+    pub fn rename_task(&mut self) {
+        if self.phase != Phase::Work {
+            return;
+        }
+        self.renaming_task = true;
+        self.task_input_buffer = self.current_task.clone();
+        self.screen = Screen::TaskInput;
     }
 
     pub fn skip_phase(&mut self) {
@@ -1436,5 +1457,54 @@ mod tests {
         let mut app = App::with_config(25, 5, 15, 4);
         app.start_manual_break();
         assert_eq!(app.progress(), 0.0);
+    }
+
+    // -- Rename task --
+
+    #[test]
+    fn test_rename_task() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.current_task = "Old".to_string();
+        app.start_timer();
+        app.rename_task();
+        assert!(app.renaming_task);
+        assert_eq!(app.screen, Screen::TaskInput);
+        assert_eq!(app.task_input_buffer, "Old");
+    }
+
+    #[test]
+    fn test_rename_submit_returns_to_timer() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.start_timer();
+        app.rename_task();
+        app.task_input_buffer.clear();
+        app.task_input_char('N');
+        app.task_input_char('e');
+        app.task_input_char('w');
+        app.submit_task();
+        assert_eq!(app.screen, Screen::Timer);
+        assert_eq!(app.current_task, "New");
+        assert!(!app.renaming_task);
+    }
+
+    #[test]
+    fn test_rename_skip_returns_to_timer() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.current_task = "Keep".to_string();
+        app.start_timer();
+        app.rename_task();
+        app.skip_task_input();
+        assert_eq!(app.screen, Screen::Timer);
+        assert_eq!(app.current_task, "Keep");
+        assert!(!app.renaming_task);
+    }
+
+    #[test]
+    fn test_rename_noop_during_break() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.skip_phase(); // Work -> Break
+        app.rename_task();
+        assert!(!app.renaming_task);
+        assert_ne!(app.screen, Screen::TaskInput);
     }
 }
