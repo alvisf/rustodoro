@@ -9,6 +9,9 @@ use ratatui::{
 use crate::app::{App, Outcome, Phase, Screen, TodoMode, format_duration};
 use crate::store;
 
+const MAX_ENERGY_BARS: u64 = 4;
+const SECONDS_PER_HOUR: u64 = 3600;
+
 fn phase_color(phase: Phase) -> Color {
     match phase {
         Phase::Work => Color::Red,
@@ -398,13 +401,7 @@ fn draw_timer_screen(frame: &mut Frame, app: &App) {
 
 fn draw_timer(frame: &mut Frame, area: Rect, app: &App) {
     let overtime = app.is_overtime();
-    let color = if app.manual_break {
-        Color::Green
-    } else if app.paused || overtime {
-        Color::Yellow
-    } else {
-        phase_color(app.phase)
-    };
+    let color = timer_color(app, overtime);
 
     let block = Block::default()
         .title(" 🍅 Pomodoro Timer ")
@@ -572,24 +569,8 @@ fn draw_stats(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
     let overtime = app.is_overtime();
-    let color = if app.manual_break {
-        Color::Green
-    } else if app.paused || overtime {
-        Color::Yellow
-    } else {
-        phase_color(app.phase)
-    };
-    let (status, icon) = if app.manual_break && app.paused {
-        ("paused", "⏸")
-    } else if app.manual_break {
-        ("break", "☕")
-    } else if app.paused {
-        ("paused", "⏸")
-    } else if overtime {
-        ("overtime", "⏰")
-    } else {
-        ("running", "▶")
-    };
+    let color = timer_color(app, overtime);
+    let (status, icon) = status_info(app, overtime);
 
     let spans = if app.manual_break {
         vec![
@@ -831,10 +812,9 @@ fn draw_quit_dialog(frame: &mut Frame, app: &App) {
 // ── Energy bar ───────────────────────────────────────────
 
 fn energy_bar_title(app: &App) -> Title<'static> {
-    let max_bars: u64 = 4;
     let total_secs = app.today_work_secs() + app.today_helping_secs();
-    let hours_worked = total_secs / 3600;
-    let remaining = max_bars.saturating_sub(hours_worked);
+    let hours_worked = total_secs / SECONDS_PER_HOUR;
+    let remaining = MAX_ENERGY_BARS.saturating_sub(hours_worked);
 
     let color = match remaining {
         3..=u64::MAX => Color::Green,
@@ -843,7 +823,7 @@ fn energy_bar_title(app: &App) -> Title<'static> {
     };
 
     let mut spans = vec![Span::styled("⚡ ", Style::default().fg(color))];
-    for i in 0..max_bars {
+    for i in 0..MAX_ENERGY_BARS {
         if i > 0 {
             spans.push(Span::raw(" "));
         }
@@ -856,6 +836,26 @@ fn energy_bar_title(app: &App) -> Title<'static> {
     spans.push(Span::raw(" "));
 
     Title::from(Line::from(spans)).alignment(Alignment::Right)
+}
+
+fn timer_color(app: &App, overtime: bool) -> Color {
+    if app.manual_break {
+        Color::Green
+    } else if app.paused || overtime {
+        Color::Yellow
+    } else {
+        phase_color(app.phase)
+    }
+}
+
+fn status_info(app: &App, overtime: bool) -> (&'static str, &'static str) {
+    match (app.manual_break, app.paused, overtime) {
+        (true, true, _) => ("paused", "⏸"),
+        (true, false, _) => ("break", "☕"),
+        (_, true, _) => ("paused", "⏸"),
+        (_, _, true) => ("overtime", "⏰"),
+        _ => ("running", "▶"),
+    }
 }
 
 // ── Shared controls bar ──────────────────────────────────

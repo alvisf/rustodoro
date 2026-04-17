@@ -23,7 +23,7 @@ fn main() -> io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let tick_rate = Duration::from_millis(200);
+    let tick_rate = Duration::from_millis(200); // 5 fps
 
     loop {
         terminal.draw(|frame| ui::draw(frame, &app))?;
@@ -52,7 +52,7 @@ fn main() -> io::Result<()> {
                     KeyCode::Left | KeyCode::Char('h') => app.decrement_field(),
                     KeyCode::Right | KeyCode::Char('l') => app.increment_field(),
                     KeyCode::Enter => app.start_timer(),
-                    KeyCode::Esc => app.open_todo_list(true),
+                    KeyCode::Esc => app.return_to_task_picker(),
                     KeyCode::Char('q') => app.request_quit(),
                     _ => {}
                 },
@@ -107,7 +107,7 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('w') => app.shorten_work(),
                     KeyCode::Char('r') => app.rename_task(),
                     KeyCode::Char('l') => app.open_daily_log(),
-                    KeyCode::Char('t') => app.open_todo_list(false),
+                    KeyCode::Char('t') => app.open_todo_manager(),
                     KeyCode::Enter => app.confirm_break(),
                     _ => {}
                 },

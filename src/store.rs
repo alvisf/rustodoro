@@ -6,6 +6,9 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
+const SECONDS_PER_DAY: i64 = 86_400;
+const SECONDS_PER_HOUR: u64 = 3600;
+
 #[derive(Debug, Default, Clone)]
 pub struct DayStats {
     pub work_secs: u64,
@@ -32,7 +35,7 @@ fn log_dir() -> PathBuf {
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs()
 }
 
@@ -75,7 +78,7 @@ pub fn local_date_str() -> String {
 }
 
 pub fn local_date_for_offset(offset_days: i64) -> String {
-    let secs = unix_now() as i64 + offset_days * 86400;
+    let secs = unix_now() as i64 + offset_days * SECONDS_PER_DAY;
     let Some(tm) = local_tm(secs) else {
         return "????-??-??".to_string();
     };
@@ -92,8 +95,8 @@ pub fn yesterday_str() -> String {
 }
 
 pub fn format_hours(total_secs: u64) -> String {
-    let h = total_secs / 3600;
-    let m = (total_secs % 3600) / 60;
+    let h = total_secs / SECONDS_PER_HOUR;
+    let m = (total_secs % SECONDS_PER_HOUR) / 60;
     format!("{h}h {m:02}m")
 }
 
@@ -108,12 +111,18 @@ fn quarter_for_month(month: u32) -> u32 {
 }
 
 fn quarterly_filename(date: &str) -> String {
+    if date.len() < 7 {
+        return "unknown-Q1.md".to_string();
+    }
     let month: u32 = date[5..7].parse().unwrap_or(1);
     let year = &date[0..4];
     format!("{year}-Q{}.md", quarter_for_month(month))
 }
 
 fn quarterly_title(date: &str) -> String {
+    if date.len() < 7 {
+        return "Unknown Q1".to_string();
+    }
     let month: u32 = date[5..7].parse().unwrap_or(1);
     let year = &date[0..4];
     format!("{year} Q{}", quarter_for_month(month))

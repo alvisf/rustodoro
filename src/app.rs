@@ -3,6 +3,15 @@ use std::time::{Duration, Instant};
 
 use crate::store::{self, DayStats};
 
+const SECONDS_PER_MINUTE: u64 = 60;
+const MIN_WORK_SECS: u64 = SECONDS_PER_MINUTE;
+const MAX_WORK_SECS: u64 = 120 * SECONDS_PER_MINUTE;
+const MIN_BREAK_SECS: u64 = SECONDS_PER_MINUTE;
+const MAX_BREAK_SECS: u64 = 60 * SECONDS_PER_MINUTE;
+const MAX_SESSIONS: u32 = 10;
+const DISTRACTION_SECS: u64 = 300;
+const WRAP_UP_SECS: u64 = 300;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Setup,
@@ -203,12 +212,15 @@ impl App {
     pub fn increment_field(&mut self) {
         match self.selected_field {
             0 => {
-                self.work_secs = (self.work_secs + 60).min(120 * 60);
+                self.work_secs = (self.work_secs + SECONDS_PER_MINUTE).min(MAX_WORK_SECS);
                 self.config_work_secs = self.work_secs;
             }
-            1 => self.break_secs = (self.break_secs + 60).min(60 * 60),
-            2 => self.long_break_secs = (self.long_break_secs + 60).min(60 * 60),
-            3 => self.sessions_before_long = (self.sessions_before_long + 1).min(10),
+            1 => self.break_secs = (self.break_secs + SECONDS_PER_MINUTE).min(MAX_BREAK_SECS),
+            2 => {
+                self.long_break_secs =
+                    (self.long_break_secs + SECONDS_PER_MINUTE).min(MAX_BREAK_SECS)
+            }
+            3 => self.sessions_before_long = (self.sessions_before_long + 1).min(MAX_SESSIONS),
             _ => {}
         }
     }
@@ -216,11 +228,24 @@ impl App {
     pub fn decrement_field(&mut self) {
         match self.selected_field {
             0 => {
-                self.work_secs = self.work_secs.saturating_sub(60).max(60);
+                self.work_secs = self
+                    .work_secs
+                    .saturating_sub(SECONDS_PER_MINUTE)
+                    .max(MIN_WORK_SECS);
                 self.config_work_secs = self.work_secs;
             }
-            1 => self.break_secs = self.break_secs.saturating_sub(60).max(60),
-            2 => self.long_break_secs = self.long_break_secs.saturating_sub(60).max(60),
+            1 => {
+                self.break_secs = self
+                    .break_secs
+                    .saturating_sub(SECONDS_PER_MINUTE)
+                    .max(MIN_BREAK_SECS)
+            }
+            2 => {
+                self.long_break_secs = self
+                    .long_break_secs
+                    .saturating_sub(SECONDS_PER_MINUTE)
+                    .max(MIN_BREAK_SECS)
+            }
             3 => self.sessions_before_long = self.sessions_before_long.saturating_sub(1).max(1),
             _ => {}
         }
@@ -266,7 +291,7 @@ impl App {
             self.renaming_task = false;
             self.screen = Screen::Timer;
         } else {
-            self.open_todo_list(true);
+            self.return_to_task_picker();
         }
     }
 
@@ -334,17 +359,26 @@ impl App {
     }
 
     pub fn tick(&mut self) {
-        if self.persist {
-            let today = store::local_date_str();
-            if !self.last_date.is_empty() && self.last_date != today {
-                self.session = 1;
-                self.history.clear();
-                self.daily_stats = store::load_daily_stats();
-                self.todos = store::load_todos();
-            }
-            self.last_date = today;
-        }
+        self.check_date_change();
+        self.auto_complete_break();
+        self.check_overtime_notification();
+    }
 
+    fn check_date_change(&mut self) {
+        if !self.persist {
+            return;
+        }
+        let today = store::local_date_str();
+        if !self.last_date.is_empty() && self.last_date != today {
+            self.session = 1;
+            self.history.clear();
+            self.daily_stats = store::load_daily_stats();
+            self.todos = store::load_todos();
+        }
+        self.last_date = today;
+    }
+
+    fn auto_complete_break(&mut self) {
         if !self.paused
             && self.remaining_secs() == 0
             && self.phase != Phase::Work
@@ -352,11 +386,10 @@ impl App {
         {
             self.finish_phase(Outcome::Completed);
         }
+    }
 
-        if self.persist
-            && self.phase == Phase::Work
-            && self.is_overtime()
-            && !self.overtime_notified
+    fn check_overtime_notification(&mut self) {
+        if self.persist && self.is_in_active_work() && self.is_overtime() && !self.overtime_notified
         {
             self.overtime_notified = true;
             store::send_notification("⏰ Time's up!", "Take a break when you're ready");
@@ -376,21 +409,24 @@ impl App {
     }
 
     pub fn distraction(&mut self) {
-        if self.phase != Phase::Work || self.manual_break {
+        if !self.is_in_active_work() {
             return;
         }
-        self.pause_accumulated += Duration::from_secs(300);
+        self.pause_accumulated += Duration::from_secs(DISTRACTION_SECS);
     }
 
     pub fn shorten_work(&mut self) {
-        if self.phase != Phase::Work || self.manual_break {
+        if !self.is_in_active_work() {
             return;
         }
-        self.work_secs = self.work_secs.saturating_sub(300).max(60);
+        self.work_secs = self
+            .work_secs
+            .saturating_sub(WRAP_UP_SECS)
+            .max(MIN_WORK_SECS);
     }
 
     pub fn rename_task(&mut self) {
-        if self.phase != Phase::Work || self.manual_break {
+        if !self.is_in_active_work() {
             return;
         }
         self.renaming_task = true;
@@ -403,118 +439,50 @@ impl App {
     }
 
     pub fn confirm_break(&mut self) {
-        if self.phase != Phase::Work || self.manual_break {
+        if !self.is_in_active_work() {
             return;
         }
 
         let elapsed = self.elapsed_secs();
-        let total = self.phase_total_secs();
-        let end_wall = store::local_time_str();
-        let end_wall_12h = store::local_time_12h();
-        let overtime = elapsed.saturating_sub(total);
+        let overtime = elapsed.saturating_sub(self.phase_total_secs());
 
-        if elapsed > 0 {
-            self.record_work(elapsed, &end_wall_12h, Outcome::Completed);
-        }
-
-        self.history.push(HistoryEntry {
-            session: self.session,
-            phase: Phase::Work,
-            elapsed_secs: elapsed,
-            total_secs: total,
-            outcome: Outcome::Completed,
-            task: self.current_task.clone(),
-            start_time: self.phase_start_wall.clone(),
-            end_time: end_wall,
-        });
-
-        let break_dur = self.break_secs.max(1);
-        let breaks_to_skip = (overtime / break_dur) as u32;
-
+        self.record_and_log_work(elapsed, Outcome::Completed);
         self.advance_phase();
 
-        if breaks_to_skip > 0 && self.phase == Phase::Break {
+        let can_skip = overtime / self.break_secs.max(1) > 0;
+        if can_skip && self.phase == Phase::Break {
             self.advance_phase();
             self.reset_timer();
             if self.screen == Screen::Timer {
-                self.open_todo_list(true);
+                self.return_to_task_picker();
             }
-            return;
-        }
-
-        self.reset_timer();
-        if self.persist {
-            let (title, msg) = match self.phase {
-                Phase::LongBreak => (
-                    "🌴 Long break!",
-                    format!("Great work! Relax for {} min", self.long_break_secs / 60),
-                ),
-                Phase::Break => (
-                    "☕ Break time!",
-                    format!("Relax for {} min", self.break_secs / 60),
-                ),
-                _ => ("", String::new()),
-            };
-            if !title.is_empty() {
-                store::send_notification(title, &msg);
-            }
+        } else {
+            self.reset_timer();
+            self.notify_break_start();
         }
     }
 
     fn finish_phase(&mut self, outcome: Outcome) {
         let elapsed = self.elapsed_secs();
-        let total = self.phase_total_secs();
-        let end_wall = store::local_time_str();
-        let end_wall_12h = store::local_time_12h();
         let prev_phase = self.phase;
 
-        if self.phase == Phase::Work && elapsed > 0 {
-            self.record_work(elapsed, &end_wall_12h, outcome);
-        }
-
-        let task = if self.phase == Phase::Work {
-            self.current_task.clone()
+        if self.phase == Phase::Work {
+            self.record_and_log_work(elapsed, outcome);
         } else {
-            String::new()
-        };
-
-        self.history.push(HistoryEntry {
-            session: self.session,
-            phase: self.phase,
-            elapsed_secs: elapsed,
-            total_secs: total,
-            outcome,
-            task,
-            start_time: self.phase_start_wall.clone(),
-            end_time: end_wall,
-        });
+            self.log_phase_completion(elapsed, outcome);
+        }
 
         self.advance_phase();
         self.reset_timer();
 
-        if self.persist {
-            match (prev_phase, self.phase) {
-                (Phase::Break | Phase::LongBreak, Phase::Work) => {
-                    store::send_notification("🍅 Break's over!", "Time to get back to work");
-                }
-                (Phase::Work, Phase::Break) => {
-                    store::send_notification(
-                        "☕ Break time!",
-                        &format!("Relax for {} min", self.break_secs / 60),
-                    );
-                }
-                (Phase::Work, Phase::LongBreak) => {
-                    store::send_notification(
-                        "🌴 Long break!",
-                        &format!("Great work! Relax for {} min", self.long_break_secs / 60),
-                    );
-                }
-                _ => {}
-            }
+        match (prev_phase, self.phase) {
+            (Phase::Break | Phase::LongBreak, Phase::Work) => self.notify_break_over(),
+            (Phase::Work, _) => self.notify_break_start(),
+            _ => {}
         }
 
         if self.phase == Phase::Work && self.screen == Screen::Timer {
-            self.open_todo_list(true);
+            self.return_to_task_picker();
         }
     }
 
@@ -577,13 +545,82 @@ impl App {
         entry.sessions += 1;
     }
 
+    fn record_and_log_work(&mut self, elapsed: u64, outcome: Outcome) {
+        let end_wall = store::local_time_str();
+        let end_wall_12h = store::local_time_12h();
+        if elapsed > 0 {
+            self.record_work(elapsed, &end_wall_12h, outcome);
+        }
+        self.history.push(HistoryEntry {
+            session: self.session,
+            phase: Phase::Work,
+            elapsed_secs: elapsed,
+            total_secs: self.phase_total_secs(),
+            outcome,
+            task: self.current_task.clone(),
+            start_time: self.phase_start_wall.clone(),
+            end_time: end_wall,
+        });
+    }
+
+    fn log_phase_completion(&mut self, elapsed: u64, outcome: Outcome) {
+        self.history.push(HistoryEntry {
+            session: self.session,
+            phase: self.phase,
+            elapsed_secs: elapsed,
+            total_secs: self.phase_total_secs(),
+            outcome,
+            task: String::new(),
+            start_time: self.phase_start_wall.clone(),
+            end_time: store::local_time_str(),
+        });
+    }
+
+    fn notify_break_start(&self) {
+        if !self.persist {
+            return;
+        }
+        let (title, msg) = match self.phase {
+            Phase::LongBreak => (
+                "🌴 Long break!",
+                format!(
+                    "Great work! Relax for {} min",
+                    self.long_break_secs / SECONDS_PER_MINUTE
+                ),
+            ),
+            Phase::Break => (
+                "☕ Break time!",
+                format!("Relax for {} min", self.break_secs / SECONDS_PER_MINUTE),
+            ),
+            _ => return,
+        };
+        store::send_notification(title, &msg);
+    }
+
+    fn notify_break_over(&self) {
+        if self.persist {
+            store::send_notification("🍅 Break's over!", "Time to get back to work");
+        }
+    }
+
+    fn is_in_active_work(&self) -> bool {
+        self.phase == Phase::Work && !self.manual_break
+    }
+
     // -- Todo list --
 
-    pub fn open_todo_list(&mut self, picking: bool) {
-        self.todo_picking = picking;
-        if picking {
-            self.todo_cursor = 0;
-        }
+    pub fn return_to_task_picker(&mut self) {
+        self.todo_picking = true;
+        self.todo_cursor = 0;
+        self.prepare_todo_list();
+    }
+
+    pub fn open_todo_manager(&mut self) {
+        self.todo_picking = false;
+        self.prepare_todo_list();
+    }
+
+    fn prepare_todo_list(&mut self) {
         self.todo_mode = TodoMode::Normal;
         self.todo_input_buffer.clear();
         if self.persist {
@@ -726,9 +763,7 @@ impl App {
     }
 
     pub fn has_active_work_session(&self) -> bool {
-        self.phase == Phase::Work
-            && !self.manual_break
-            && matches!(self.screen, Screen::Timer | Screen::DailyLog)
+        self.is_in_active_work() && matches!(self.screen, Screen::Timer | Screen::DailyLog)
     }
 
     pub fn start_manual_break(&mut self) {
@@ -742,7 +777,7 @@ impl App {
 
     pub fn end_manual_break(&mut self) {
         self.manual_break = false;
-        self.open_todo_list(true);
+        self.return_to_task_picker();
     }
 
     fn persist_todos(&self) {
@@ -754,28 +789,23 @@ impl App {
     // -- End task (early completion with notes) --
 
     pub fn end_task(&mut self) {
-        self.end_work_session(false);
+        self.complete_work_session(Outcome::Completed);
     }
 
     pub fn help_others(&mut self) {
-        self.end_work_session(true);
+        self.complete_work_session(Outcome::Helping);
     }
 
-    fn end_work_session(&mut self, helping: bool) {
-        if self.phase != Phase::Work || self.manual_break {
+    fn complete_work_session(&mut self, outcome: Outcome) {
+        if !self.is_in_active_work() {
             return;
         }
         let elapsed = self.elapsed_secs();
-        let outcome = if helping {
-            Outcome::Helping
-        } else {
-            Outcome::Completed
-        };
 
         self.pending_end_secs = elapsed;
         self.pending_end_wall = store::local_time_str();
         self.pending_end_wall_12h = store::local_time_12h();
-        self.pending_is_helping = helping;
+        self.pending_is_helping = outcome == Outcome::Helping;
 
         self.history.push(HistoryEntry {
             session: self.session,
@@ -790,10 +820,9 @@ impl App {
 
         let today = store::local_date_str();
         let entry = self.daily_stats.entry(today).or_default();
-        if helping {
-            entry.helping_secs += elapsed;
-        } else {
-            entry.work_secs += elapsed;
+        match outcome {
+            Outcome::Helping => entry.helping_secs += elapsed,
+            _ => entry.work_secs += elapsed,
         }
         entry.sessions += 1;
 
@@ -843,22 +872,7 @@ impl App {
         self.advance_phase();
         self.reset_timer();
         self.screen = Screen::Timer;
-        if self.persist {
-            let (title, msg) = match self.phase {
-                Phase::LongBreak => (
-                    "🌴 Long break!",
-                    format!("Great work! Relax for {} min", self.long_break_secs / 60),
-                ),
-                Phase::Break => (
-                    "☕ Break time!",
-                    format!("Relax for {} min", self.break_secs / 60),
-                ),
-                _ => ("", String::new()),
-            };
-            if !title.is_empty() {
-                store::send_notification(title, &msg);
-            }
-        }
+        self.notify_break_start();
     }
 
     pub fn save_current_work_if_needed(&mut self) {
@@ -866,10 +880,7 @@ impl App {
             self.save_pending_entry("");
             return;
         }
-        if self.phase == Phase::Work
-            && !self.manual_break
-            && matches!(self.screen, Screen::Timer | Screen::DailyLog)
-        {
+        if self.has_active_work_session() {
             let elapsed = self.elapsed_secs();
             if elapsed > 0 {
                 let end_wall_12h = store::local_time_12h();
@@ -881,12 +892,11 @@ impl App {
     pub fn today_work_secs(&self) -> u64 {
         let today = store::local_date_str();
         let saved = self.daily_stats.get(&today).map_or(0, |s| s.work_secs);
-        let current =
-            if self.phase == Phase::Work && self.screen == Screen::Timer && !self.manual_break {
-                self.elapsed_secs()
-            } else {
-                0
-            };
+        let current = if self.is_in_active_work() && self.screen == Screen::Timer {
+            self.elapsed_secs()
+        } else {
+            0
+        };
         saved + current
     }
 
@@ -1276,7 +1286,7 @@ mod tests {
     #[test]
     fn test_open_todo_list_manage() {
         let mut app = App::with_config(25, 5, 15, 4);
-        app.open_todo_list(false);
+        app.open_todo_manager();
         assert_eq!(app.screen, Screen::TodoList);
         assert!(!app.todo_picking);
     }
@@ -1284,7 +1294,7 @@ mod tests {
     #[test]
     fn test_todo_add_and_navigate() {
         let mut app = App::with_config(25, 5, 15, 4);
-        app.open_todo_list(true);
+        app.return_to_task_picker();
         app.todo_start_add();
         assert!(app.todo_is_input_mode());
         app.todo_input_char('T');
@@ -1378,7 +1388,7 @@ mod tests {
     #[test]
     fn test_todo_back_manage_returns_to_timer() {
         let mut app = App::with_config(25, 5, 15, 4);
-        app.open_todo_list(false);
+        app.open_todo_manager();
         app.todo_back();
         assert_eq!(app.screen, Screen::Timer);
     }
