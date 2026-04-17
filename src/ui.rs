@@ -148,7 +148,12 @@ fn draw_task_input(frame: &mut Frame, app: &App) {
     let para = Paragraph::new(lines).alignment(Alignment::Center);
     frame.render_widget(para, inner);
 
-    draw_controls(frame, chunks[1], &[("Enter", "start"), ("Esc", "skip")]);
+    let controls: &[(&str, &str)] = if app.renaming_task {
+        &[("Enter", "save"), ("Esc", "cancel")]
+    } else {
+        &[("Enter", "confirm"), ("Esc", "cancel")]
+    };
+    draw_controls(frame, chunks[1], controls);
 }
 
 // ── Todo list screen ──────────────────────────────────────
@@ -194,7 +199,7 @@ fn draw_todo_list(frame: &mut Frame, app: &App) {
             ("n", "custom"),
             ("l", "log"),
             ("b", "break"),
-            ("Esc", "skip"),
+            ("Esc", "quit"),
         ]
     } else {
         vec![

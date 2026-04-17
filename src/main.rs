@@ -126,7 +126,7 @@ fn main() -> io::Result<()> {
             }
         }
 
-        if app.screen == Screen::Timer {
+        if matches!(app.screen, Screen::Timer | Screen::DailyLog) {
             app.tick();
         }
 

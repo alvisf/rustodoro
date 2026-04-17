@@ -74,6 +74,7 @@ pub const SETUP_FIELD_COUNT: usize = 4;
 
 pub struct App {
     pub work_secs: u64,
+    config_work_secs: u64,
     pub break_secs: u64,
     pub long_break_secs: u64,
     pub sessions_before_long: u32,
@@ -150,6 +151,7 @@ impl App {
     ) -> Self {
         Self {
             work_secs,
+            config_work_secs: work_secs,
             break_secs,
             long_break_secs,
             sessions_before_long: sessions_before_long.max(1),
@@ -200,7 +202,10 @@ impl App {
 
     pub fn increment_field(&mut self) {
         match self.selected_field {
-            0 => self.work_secs = (self.work_secs + 60).min(120 * 60),
+            0 => {
+                self.work_secs = (self.work_secs + 60).min(120 * 60);
+                self.config_work_secs = self.work_secs;
+            }
             1 => self.break_secs = (self.break_secs + 60).min(60 * 60),
             2 => self.long_break_secs = (self.long_break_secs + 60).min(60 * 60),
             3 => self.sessions_before_long = (self.sessions_before_long + 1).min(10),
@@ -210,7 +215,10 @@ impl App {
 
     pub fn decrement_field(&mut self) {
         match self.selected_field {
-            0 => self.work_secs = self.work_secs.saturating_sub(60).max(60),
+            0 => {
+                self.work_secs = self.work_secs.saturating_sub(60).max(60);
+                self.config_work_secs = self.work_secs;
+            }
             1 => self.break_secs = self.break_secs.saturating_sub(60).max(60),
             2 => self.long_break_secs = self.long_break_secs.saturating_sub(60).max(60),
             3 => self.sessions_before_long = self.sessions_before_long.saturating_sub(1).max(1),
@@ -263,6 +271,7 @@ impl App {
     }
 
     fn begin_work_phase(&mut self) {
+        self.work_secs = self.config_work_secs;
         self.screen = Screen::Timer;
         self.phase_start = Instant::now();
         self.pause_accumulated = Duration::ZERO;
@@ -367,21 +376,21 @@ impl App {
     }
 
     pub fn distraction(&mut self) {
-        if self.phase != Phase::Work {
+        if self.phase != Phase::Work || self.manual_break {
             return;
         }
         self.pause_accumulated += Duration::from_secs(300);
     }
 
     pub fn shorten_work(&mut self) {
-        if self.phase != Phase::Work {
+        if self.phase != Phase::Work || self.manual_break {
             return;
         }
         self.work_secs = self.work_secs.saturating_sub(300).max(60);
     }
 
     pub fn rename_task(&mut self) {
-        if self.phase != Phase::Work {
+        if self.phase != Phase::Work || self.manual_break {
             return;
         }
         self.renaming_task = true;
@@ -394,7 +403,7 @@ impl App {
     }
 
     pub fn confirm_break(&mut self) {
-        if self.phase != Phase::Work {
+        if self.phase != Phase::Work || self.manual_break {
             return;
         }
 
@@ -530,6 +539,7 @@ impl App {
         self.pause_accumulated = Duration::ZERO;
         self.pause_start = None;
         self.paused = false;
+        self.overtime_notified = false;
         self.phase_start_wall = store::local_time_str();
         self.phase_start_wall_12h = store::local_time_12h();
     }
@@ -571,7 +581,9 @@ impl App {
 
     pub fn open_todo_list(&mut self, picking: bool) {
         self.todo_picking = picking;
-        self.todo_cursor = 0;
+        if picking {
+            self.todo_cursor = 0;
+        }
         self.todo_mode = TodoMode::Normal;
         self.todo_input_buffer.clear();
         if self.persist {
@@ -750,7 +762,7 @@ impl App {
     }
 
     fn end_work_session(&mut self, helping: bool) {
-        if self.phase != Phase::Work {
+        if self.phase != Phase::Work || self.manual_break {
             return;
         }
         let elapsed = self.elapsed_secs();
@@ -854,7 +866,10 @@ impl App {
             self.save_pending_entry("");
             return;
         }
-        if self.phase == Phase::Work && matches!(self.screen, Screen::Timer | Screen::DailyLog) {
+        if self.phase == Phase::Work
+            && !self.manual_break
+            && matches!(self.screen, Screen::Timer | Screen::DailyLog)
+        {
             let elapsed = self.elapsed_secs();
             if elapsed > 0 {
                 let end_wall_12h = store::local_time_12h();
