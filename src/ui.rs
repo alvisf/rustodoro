@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, block::Title},
 };
 
-use crate::app::{App, Outcome, Phase, Screen, TodoMode, format_duration};
+use crate::app::{App, HistoryEntry, Outcome, Phase, Screen, TodoMode, format_duration};
 use crate::store;
 
 const MAX_ENERGY_BARS: u64 = 4;
@@ -695,59 +695,182 @@ fn draw_daily_log(frame: &mut Frame, app: &App) {
 
     let today = store::local_date_str();
     let yesterday = store::yesterday_str();
+    let mut lines: Vec<Line> = Vec::new();
 
-    let mut items: Vec<ListItem> = Vec::new();
+    let total_work = app.today_work_secs();
+    let total_helping = app.today_helping_secs();
+    let sessions = app.today_sessions();
+    let has_any_today = total_work > 0 || sessions > 0;
 
-    if app.daily_stats.is_empty() && app.today_work_secs() == 0 {
-        items.push(ListItem::new(Line::from(Span::styled(
-            "  No work logged yet. Complete a work session to see stats!",
+    // ── Today header ──
+    let bold_yellow = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+
+    lines.push(Line::from(Span::styled(
+        format!("  Today — {today}"),
+        bold_yellow,
+    )));
+    lines.push(Line::from(Span::styled(
+        "  ─────────────────────────────────────────",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let mut summary = vec![
+        Span::styled("  Total: ", Style::default().fg(Color::White)),
+        Span::styled(store::format_hours(total_work), bold_yellow),
+        Span::styled("  │  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{sessions} session{}", if sessions == 1 { "" } else { "s" }),
+            Style::default().fg(Color::White),
+        ),
+    ];
+    if total_helping > 0 {
+        summary.push(Span::styled("  │  ", Style::default().fg(Color::DarkGray)));
+        summary.push(Span::styled(
+            format!("Helping: {}", store::format_hours(total_helping)),
+            Style::default().fg(Color::Cyan),
+        ));
+    }
+    lines.push(Line::from(summary));
+    lines.push(Line::default());
+
+    // ── Today's individual sessions ──
+    let work_entries: Vec<_> = app
+        .history
+        .iter()
+        .filter(|e| e.phase == Phase::Work)
+        .collect();
+    let has_active = app.phase == Phase::Work && !app.manual_break;
+
+    if work_entries.is_empty() && !has_active && !has_any_today {
+        lines.push(Line::from(Span::styled(
+            "  No sessions yet today",
             Style::default().fg(Color::DarkGray),
-        ))));
-    } else {
-        for (date, stats) in app.daily_stats.iter().rev() {
-            let label = if *date == today {
-                "today    "
-            } else if *date == yesterday {
+        )));
+    }
+
+    for entry in &work_entries {
+        lines.push(build_session_entry_line(entry));
+    }
+
+    if has_active {
+        lines.push(build_active_session_line(app));
+    }
+
+    // ── History section ──
+    let past_days: Vec<_> = app
+        .daily_stats
+        .iter()
+        .rev()
+        .filter(|(d, _)| **d != today)
+        .collect();
+
+    if !past_days.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "  ─────── History ─────────────────────────",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        for (date, stats) in &past_days {
+            let label = if **date == yesterday {
                 "yesterday"
             } else {
                 "         "
             };
-
-            let work_secs = if *date == today {
-                app.today_work_secs()
-            } else {
-                stats.work_secs
-            };
-            let hours = store::format_hours(work_secs);
-            let sessions = stats.sessions;
-
-            let style = if *date == today {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Gray)
-            };
-
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(format!("  {date}  "), style),
+            let hours = store::format_hours(stats.work_secs);
+            let s = stats.sessions;
+            let mut spans = vec![
+                Span::styled(format!("  {date}  "), Style::default().fg(Color::Gray)),
                 Span::styled(format!("{label}  "), Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{hours:>8}"), style),
+                Span::styled(format!("{hours:>8}"), Style::default().fg(Color::Gray)),
                 Span::styled(
-                    format!(
-                        "   {sessions} session{}",
-                        if sessions == 1 { "" } else { "s" }
-                    ),
+                    format!("   {s} session{}", if s == 1 { "" } else { "s" }),
                     Style::default().fg(Color::DarkGray),
                 ),
-            ])));
+            ];
+            if stats.helping_secs > 0 {
+                spans.push(Span::styled(
+                    format!("  (🤝 {})", store::format_hours(stats.helping_secs)),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            lines.push(Line::from(spans));
         }
     }
 
-    let list = List::new(items);
-    frame.render_widget(list, inner);
+    let paragraph = Paragraph::new(lines).scroll((app.daily_log_scroll as u16, 0));
+    frame.render_widget(paragraph, inner);
 
-    draw_controls(frame, chunks[1], &[("Esc", "back"), ("q", "quit")]);
+    draw_controls(
+        frame,
+        chunks[1],
+        &[("↑/↓", "scroll"), ("Esc", "back"), ("q", "quit")],
+    );
+}
+
+fn build_session_entry_line(entry: &HistoryEntry) -> Line<'static> {
+    let (icon, color) = match entry.outcome {
+        Outcome::Completed => ("✓", Color::Green),
+        Outcome::Skipped => ("⏭", Color::Yellow),
+        Outcome::Helping => ("🤝", Color::Cyan),
+    };
+
+    let time_range = if entry.start_time.is_empty() {
+        String::new()
+    } else {
+        format!("{} – {}", entry.start_time, entry.end_time)
+    };
+
+    let mut spans = vec![
+        Span::styled(format!("  {icon} "), Style::default().fg(color)),
+        Span::styled(
+            format!("#{:<3} ", entry.session),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(
+            format!("{:<16}", time_range),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled(
+            format!("({})  ", format_duration(entry.elapsed_secs)),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+    if !entry.task.is_empty() {
+        spans.push(Span::styled(
+            entry.task.clone(),
+            Style::default().fg(Color::White),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn build_active_session_line(app: &App) -> Line<'static> {
+    let elapsed = app.elapsed_secs();
+    let mut spans = vec![
+        Span::styled("  ▶ ", Style::default().fg(Color::Green)),
+        Span::styled(
+            format!("#{:<3} ", app.session),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(
+            format!("{:<16}", format!("{} – ...", app.phase_start_wall)),
+            Style::default().fg(Color::Green),
+        ),
+        Span::styled(
+            format!("({})  ", format_duration(elapsed)),
+            Style::default().fg(Color::Green),
+        ),
+    ];
+    if !app.current_task.is_empty() {
+        spans.push(Span::styled(
+            app.current_task.clone(),
+            Style::default().fg(Color::Green),
+        ));
+    }
+    Line::from(spans)
 }
 
 // ── Quit confirmation dialog ─────────────────────────────

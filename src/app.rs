@@ -115,7 +115,8 @@ pub struct App {
     pub todo_picking: bool,
     pub return_from_log: Screen,
     pub manual_break: bool,
-    phase_start_wall: String,
+    pub phase_start_wall: String,
+    pub daily_log_scroll: usize,
     phase_start_wall_12h: String,
     overtime_notified: bool,
     last_date: String,
@@ -193,6 +194,7 @@ impl App {
             return_from_log: Screen::TodoList,
             manual_break: false,
             phase_start_wall: String::new(),
+            daily_log_scroll: 0,
             phase_start_wall_12h: String::new(),
             overtime_notified: false,
             last_date: String::new(),
@@ -742,11 +744,27 @@ impl App {
 
     pub fn open_daily_log(&mut self) {
         self.return_from_log = self.screen;
+        self.daily_log_scroll = 0;
         self.screen = Screen::DailyLog;
     }
 
     pub fn close_daily_log(&mut self) {
         self.screen = self.return_from_log;
+    }
+
+    pub fn daily_log_scroll_up(&mut self) {
+        self.daily_log_scroll = self.daily_log_scroll.saturating_sub(1);
+    }
+
+    pub fn daily_log_scroll_down(&mut self) {
+        let work_count = self
+            .history
+            .iter()
+            .filter(|e| e.phase == Phase::Work)
+            .count();
+        let past_days = self.daily_stats.len();
+        let max = (work_count + past_days + 8).saturating_sub(4);
+        self.daily_log_scroll = (self.daily_log_scroll + 1).min(max);
     }
 
     pub fn request_quit(&mut self) {
