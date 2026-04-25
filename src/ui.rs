@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, block::Title},
 };
 
-use crate::app::{App, HistoryEntry, Outcome, Phase, Screen, TodoMode, format_duration};
+use crate::app::{App, Outcome, Phase, Screen, TodoMode, format_duration};
 use crate::store;
 
 const MAX_ENERGY_BARS: u64 = 4;
@@ -700,13 +700,12 @@ fn draw_daily_log(frame: &mut Frame, app: &App) {
     let total_work = app.today_work_secs();
     let total_helping = app.today_helping_secs();
     let sessions = app.today_sessions();
-    let has_any_today = total_work > 0 || sessions > 0;
 
-    // ── Today header ──
     let bold_yellow = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
 
+    // ── Today header ──
     lines.push(Line::from(Span::styled(
         format!("  Today — {today}"),
         bold_yellow,
@@ -735,23 +734,25 @@ fn draw_daily_log(frame: &mut Frame, app: &App) {
     lines.push(Line::from(summary));
     lines.push(Line::default());
 
-    // ── Today's individual sessions ──
-    let work_entries: Vec<_> = app
-        .history
-        .iter()
-        .filter(|e| e.phase == Phase::Work)
-        .collect();
+    // ── Today's entries (from file) ──
+    let today_entries = app.daily_log_entries.get(&today);
     let has_active = app.phase == Phase::Work && !app.manual_break;
+    let has_file_entries = today_entries.is_some_and(|e| !e.is_empty());
 
-    if work_entries.is_empty() && !has_active && !has_any_today {
+    if !has_file_entries && !has_active && total_work == 0 && sessions == 0 {
         lines.push(Line::from(Span::styled(
             "  No sessions yet today",
             Style::default().fg(Color::DarkGray),
         )));
     }
 
-    for entry in &work_entries {
-        lines.push(build_session_entry_line(entry));
+    if let Some(entries) = today_entries {
+        for entry in entries {
+            lines.push(build_file_entry_line(entry, "  "));
+            if !entry.notes.is_empty() {
+                lines.push(build_notes_line(&entry.notes, "     "));
+            }
+        }
     }
 
     if has_active {
@@ -766,6 +767,8 @@ fn draw_daily_log(frame: &mut Frame, app: &App) {
         .filter(|(d, _)| **d != today)
         .collect();
 
+    let mut cursor_line_idx: usize = 0;
+
     if !past_days.is_empty() {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
@@ -773,16 +776,44 @@ fn draw_daily_log(frame: &mut Frame, app: &App) {
             Style::default().fg(Color::DarkGray),
         )));
 
-        for (date, stats) in &past_days {
+        for (idx, (date, stats)) in past_days.iter().enumerate() {
+            let is_cursor = idx == app.daily_log_cursor;
+            let is_expanded = app.daily_log_expanded.contains(date);
+            let has_entries = app
+                .daily_log_entries
+                .get(*date)
+                .is_some_and(|e| !e.is_empty());
+
+            if is_cursor {
+                cursor_line_idx = lines.len();
+            }
+
+            let marker = if is_cursor && is_expanded {
+                "▾ "
+            } else if is_cursor {
+                "▸ "
+            } else {
+                "  "
+            };
+
             let label = if **date == yesterday {
                 "yesterday"
             } else {
                 "         "
             };
+
+            let date_style = if is_cursor {
+                bold_yellow
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+
             let hours = store::format_hours(stats.work_secs);
             let s = stats.sessions;
+
             let mut spans = vec![
-                Span::styled(format!("  {date}  "), Style::default().fg(Color::Gray)),
+                Span::styled(marker.to_string(), date_style),
+                Span::styled(format!("{date}  "), date_style),
                 Span::styled(format!("{label}  "), Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{hours:>8}"), Style::default().fg(Color::Gray)),
                 Span::styled(
@@ -796,45 +827,71 @@ fn draw_daily_log(frame: &mut Frame, app: &App) {
                     Style::default().fg(Color::DarkGray),
                 ));
             }
+            if has_entries && !is_expanded {
+                spans.push(Span::styled("  ▸", Style::default().fg(Color::DarkGray)));
+            }
             lines.push(Line::from(spans));
+
+            if is_expanded {
+                if let Some(entries) = app.daily_log_entries.get(*date) {
+                    for entry in entries {
+                        lines.push(build_file_entry_line(entry, "    "));
+                        if !entry.notes.is_empty() {
+                            lines.push(build_notes_line(&entry.notes, "       "));
+                        }
+                    }
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        "    No entries recorded",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
         }
     }
 
-    let paragraph = Paragraph::new(lines).scroll((app.daily_log_scroll as u16, 0));
+    // Compute scroll to keep cursor visible
+    let visible = inner.height as usize;
+    let scroll = if visible == 0 || lines.len() <= visible || cursor_line_idx < visible / 3 {
+        0
+    } else {
+        (cursor_line_idx - visible / 3).min(lines.len().saturating_sub(visible))
+    };
+
+    let paragraph = Paragraph::new(lines).scroll((scroll as u16, 0));
     frame.render_widget(paragraph, inner);
 
     draw_controls(
         frame,
         chunks[1],
-        &[("↑/↓", "scroll"), ("Esc", "back"), ("q", "quit")],
+        &[
+            ("↑/↓", "navigate"),
+            ("Enter", "expand"),
+            ("Esc", "back"),
+            ("q", "quit"),
+        ],
     );
 }
 
-fn build_session_entry_line(entry: &HistoryEntry) -> Line<'static> {
-    let (icon, color) = match entry.outcome {
-        Outcome::Completed => ("✓", Color::Green),
-        Outcome::Skipped => ("⏭", Color::Yellow),
-        Outcome::Helping => ("🤝", Color::Cyan),
-    };
+fn entry_icon_and_color(mark: char) -> (&'static str, Color) {
+    match mark {
+        'x' => ("✓", Color::Green),
+        'h' => ("🤝", Color::Cyan),
+        _ => ("⏭", Color::Yellow),
+    }
+}
 
-    let time_range = if entry.start_time.is_empty() {
-        String::new()
-    } else {
-        format!("{} – {}", entry.start_time, entry.end_time)
-    };
-
+fn build_file_entry_line(entry: &store::DayEntry, indent: &str) -> Line<'static> {
+    let (icon, color) = entry_icon_and_color(entry.mark);
+    let time_range = format!("{} \u{2013} {}", entry.start_time, entry.end_time);
     let mut spans = vec![
-        Span::styled(format!("  {icon} "), Style::default().fg(color)),
+        Span::styled(format!("{indent}{icon} "), Style::default().fg(color)),
         Span::styled(
-            format!("#{:<3} ", entry.session),
-            Style::default().fg(Color::White),
-        ),
-        Span::styled(
-            format!("{:<16}", time_range),
+            format!("{:<22}", time_range),
             Style::default().fg(Color::Gray),
         ),
         Span::styled(
-            format!("({})  ", format_duration(entry.elapsed_secs)),
+            format!("({})  ", format_duration(entry.duration_secs)),
             Style::default().fg(Color::DarkGray),
         ),
     ];
@@ -847,16 +904,25 @@ fn build_session_entry_line(entry: &HistoryEntry) -> Line<'static> {
     Line::from(spans)
 }
 
+fn build_notes_line(notes: &str, indent: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("{indent}> {notes}"),
+        Style::default().fg(Color::DarkGray),
+    ))
+}
+
 fn build_active_session_line(app: &App) -> Line<'static> {
     let elapsed = app.elapsed_secs();
+    let start = &app.phase_start_wall_12h;
+    let time_display = if start.is_empty() {
+        "... \u{2013} ...".to_string()
+    } else {
+        format!("{start} \u{2013} ...")
+    };
     let mut spans = vec![
         Span::styled("  ▶ ", Style::default().fg(Color::Green)),
         Span::styled(
-            format!("#{:<3} ", app.session),
-            Style::default().fg(Color::White),
-        ),
-        Span::styled(
-            format!("{:<16}", format!("{} – ...", app.phase_start_wall)),
+            format!("{:<22}", time_display),
             Style::default().fg(Color::Green),
         ),
         Span::styled(

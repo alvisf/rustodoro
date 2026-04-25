@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use crate::store::{self, DayStats};
+use crate::store::{self, DayEntry, DayStats};
 
 const SECONDS_PER_MINUTE: u64 = 60;
 const MIN_WORK_SECS: u64 = SECONDS_PER_MINUTE;
@@ -116,8 +116,10 @@ pub struct App {
     pub return_from_log: Screen,
     pub manual_break: bool,
     pub phase_start_wall: String,
-    pub daily_log_scroll: usize,
-    phase_start_wall_12h: String,
+    pub daily_log_entries: BTreeMap<String, Vec<DayEntry>>,
+    pub daily_log_expanded: Vec<String>,
+    pub daily_log_cursor: usize,
+    pub phase_start_wall_12h: String,
     overtime_notified: bool,
     last_date: String,
 }
@@ -194,7 +196,9 @@ impl App {
             return_from_log: Screen::TodoList,
             manual_break: false,
             phase_start_wall: String::new(),
-            daily_log_scroll: 0,
+            daily_log_entries: BTreeMap::new(),
+            daily_log_expanded: Vec::new(),
+            daily_log_cursor: 0,
             phase_start_wall_12h: String::new(),
             overtime_notified: false,
             last_date: String::new(),
@@ -744,7 +748,11 @@ impl App {
 
     pub fn open_daily_log(&mut self) {
         self.return_from_log = self.screen;
-        self.daily_log_scroll = 0;
+        self.daily_log_cursor = 0;
+        self.daily_log_expanded.clear();
+        if self.persist {
+            self.daily_log_entries = store::load_daily_entries();
+        }
         self.screen = Screen::DailyLog;
     }
 
@@ -752,19 +760,34 @@ impl App {
         self.screen = self.return_from_log;
     }
 
-    pub fn daily_log_scroll_up(&mut self) {
-        self.daily_log_scroll = self.daily_log_scroll.saturating_sub(1);
+    pub fn daily_log_cursor_up(&mut self) {
+        self.daily_log_cursor = self.daily_log_cursor.saturating_sub(1);
     }
 
-    pub fn daily_log_scroll_down(&mut self) {
-        let work_count = self
-            .history
-            .iter()
-            .filter(|e| e.phase == Phase::Work)
-            .count();
-        let past_days = self.daily_stats.len();
-        let max = (work_count + past_days + 8).saturating_sub(4);
-        self.daily_log_scroll = (self.daily_log_scroll + 1).min(max);
+    pub fn daily_log_cursor_down(&mut self) {
+        let today = store::local_date_str();
+        let past_count = self.daily_stats.keys().filter(|d| **d != today).count();
+        if past_count > 0 && self.daily_log_cursor < past_count - 1 {
+            self.daily_log_cursor += 1;
+        }
+    }
+
+    pub fn daily_log_toggle_expand(&mut self) {
+        let today = store::local_date_str();
+        let past_days: Vec<_> = self
+            .daily_stats
+            .keys()
+            .rev()
+            .filter(|d| **d != today)
+            .cloned()
+            .collect();
+        if let Some(date) = past_days.get(self.daily_log_cursor) {
+            if let Some(pos) = self.daily_log_expanded.iter().position(|d| d == date) {
+                self.daily_log_expanded.remove(pos);
+            } else {
+                self.daily_log_expanded.push(date.clone());
+            }
+        }
     }
 
     pub fn request_quit(&mut self) {

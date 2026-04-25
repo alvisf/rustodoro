@@ -22,6 +22,16 @@ pub struct TodoItem {
     pub done: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct DayEntry {
+    pub mark: char,
+    pub start_time: String,
+    pub end_time: String,
+    pub duration_secs: u64,
+    pub task: String,
+    pub notes: String,
+}
+
 const LOG_DIR: &str = "/Users/alvisf/Documents/Notes/daily-logs";
 
 fn config_path() -> PathBuf {
@@ -402,14 +412,128 @@ fn parse_daily_file(date: &str, contents: &str, stats: &mut BTreeMap<String, Day
     }
 }
 
+fn parse_mmss(s: &str) -> Option<u64> {
+    let (m_str, s_str) = s.split_once(':')?;
+    Some(m_str.parse::<u64>().ok()? * 60 + s_str.parse::<u64>().ok()?)
+}
+
 fn parse_entry_duration(line: &str) -> Option<u64> {
     let start = line.find('(')?;
     let end = line.find(')')?;
-    let dur_str = &line[start + 1..end];
-    let (m_str, s_str) = dur_str.split_once(':')?;
-    let m: u64 = m_str.parse().ok()?;
-    let s: u64 = s_str.parse().ok()?;
-    Some(m * 60 + s)
+    parse_mmss(&line[start + 1..end])
+}
+
+const TIME_SEPARATOR: &str = " \u{2013} ";
+
+fn parse_entry_detail(line: &str) -> Option<DayEntry> {
+    let stripped = line.strip_prefix("- ")?;
+    if stripped.len() < 4 || stripped.as_bytes()[0] != b'[' || stripped.as_bytes()[2] != b']' {
+        return None;
+    }
+    let mark = stripped.as_bytes()[1] as char;
+    let rest = stripped.get(4..)?;
+
+    let sep_pos = rest.find(TIME_SEPARATOR)?;
+    let start_time = rest[..sep_pos].to_string();
+    let after_sep = &rest[sep_pos + TIME_SEPARATOR.len()..];
+
+    let paren_start = after_sep.find('(')?;
+    let paren_end = after_sep.find(')')?;
+    let end_time = after_sep[..paren_start].trim().to_string();
+    let duration_secs = parse_mmss(&after_sep[paren_start + 1..paren_end])?;
+
+    let task = after_sep
+        .get(paren_end + 1..)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    Some(DayEntry {
+        mark,
+        start_time,
+        end_time,
+        duration_secs,
+        task,
+        notes: String::new(),
+    })
+}
+
+pub fn load_daily_entries() -> BTreeMap<String, Vec<DayEntry>> {
+    let dir = log_dir();
+    let mut result = BTreeMap::new();
+
+    let Ok(dir_entries) = fs::read_dir(&dir) else {
+        return result;
+    };
+
+    for entry in dir_entries.flatten() {
+        let path = entry.path();
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        if ext != "md" {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
+
+        if is_quarterly_filename(stem) {
+            collect_quarterly_entries(&contents, &mut result);
+        } else if is_daily_filename(stem) {
+            collect_daily_entries(stem, &contents, &mut result);
+        }
+    }
+
+    result
+}
+
+fn collect_quarterly_entries(contents: &str, out: &mut BTreeMap<String, Vec<DayEntry>>) {
+    let lines: Vec<&str> = contents.lines().collect();
+    let mut current_date: Option<String> = None;
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if let Some(date) = line.strip_prefix("## ") {
+            let date = date.trim();
+            if is_daily_filename(date) {
+                current_date = Some(date.to_string());
+            }
+        } else if line.starts_with("- [")
+            && let Some(mut entry) = parse_entry_detail(line)
+            && let Some(date) = &current_date
+        {
+            if i + 1 < lines.len()
+                && let Some(note) = lines[i + 1].strip_prefix("  > ")
+            {
+                entry.notes = note.to_string();
+                i += 1;
+            }
+            out.entry(date.clone()).or_default().push(entry);
+        }
+        i += 1;
+    }
+}
+
+fn collect_daily_entries(date: &str, contents: &str, out: &mut BTreeMap<String, Vec<DayEntry>>) {
+    let lines: Vec<&str> = contents.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].starts_with("- [")
+            && let Some(mut entry) = parse_entry_detail(lines[i])
+        {
+            if i + 1 < lines.len()
+                && let Some(note) = lines[i + 1].strip_prefix("  > ")
+            {
+                entry.notes = note.to_string();
+                i += 1;
+            }
+            out.entry(date.to_string()).or_default().push(entry);
+        }
+        i += 1;
+    }
 }
 
 #[cfg(test)]
@@ -604,5 +728,66 @@ mod tests {
             })
             .collect();
         assert_eq!(content, "- [ ] Task A\n- [x] Task B\n");
+    }
+
+    #[test]
+    fn test_parse_entry_detail_completed() {
+        let line = "- [x] 2:30 PM \u{2013} 2:55 PM (25:00) Write parser";
+        let entry = parse_entry_detail(line).unwrap();
+        assert_eq!(entry.mark, 'x');
+        assert_eq!(entry.start_time, "2:30 PM");
+        assert_eq!(entry.end_time, "2:55 PM");
+        assert_eq!(entry.duration_secs, 1500);
+        assert_eq!(entry.task, "Write parser");
+    }
+
+    #[test]
+    fn test_parse_entry_detail_helping() {
+        let line = "- [h] 10:00 AM \u{2013} 10:15 AM (15:00) Helped John";
+        let entry = parse_entry_detail(line).unwrap();
+        assert_eq!(entry.mark, 'h');
+        assert_eq!(entry.task, "Helped John");
+        assert_eq!(entry.duration_secs, 900);
+    }
+
+    #[test]
+    fn test_parse_entry_detail_no_task() {
+        let line = "- [ ] 3:20 PM \u{2013} 3:35 PM (15:00)";
+        let entry = parse_entry_detail(line).unwrap();
+        assert_eq!(entry.mark, ' ');
+        assert!(entry.task.is_empty());
+    }
+
+    #[test]
+    fn test_parse_entry_detail_invalid() {
+        assert!(parse_entry_detail("not an entry").is_none());
+        assert!(parse_entry_detail("- invalid line").is_none());
+    }
+
+    #[test]
+    fn test_collect_quarterly_entries() {
+        let content = "\
+# 2026 Q2
+
+## 2026-04-09
+
+- [x] 9:00 AM \u{2013} 9:25 AM (25:00) Task one
+  > Some notes
+- [h] 9:30 AM \u{2013} 9:45 AM (15:00) Helped team
+
+## 2026-04-10
+
+- [ ] 10:00 AM \u{2013} 10:30 AM (30:00) Task two
+";
+        let mut entries = BTreeMap::new();
+        collect_quarterly_entries(content, &mut entries);
+        let apr9 = &entries["2026-04-09"];
+        assert_eq!(apr9.len(), 2);
+        assert_eq!(apr9[0].task, "Task one");
+        assert_eq!(apr9[0].notes, "Some notes");
+        assert_eq!(apr9[1].mark, 'h');
+        let apr10 = &entries["2026-04-10"];
+        assert_eq!(apr10.len(), 1);
+        assert_eq!(apr10[0].duration_secs, 1800);
     }
 }

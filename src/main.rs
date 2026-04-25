@@ -120,8 +120,9 @@ fn main() -> io::Result<()> {
                 },
                 Screen::DailyLog => match code {
                     KeyCode::Esc | KeyCode::Backspace => app.close_daily_log(),
-                    KeyCode::Up | KeyCode::Char('k') => app.daily_log_scroll_up(),
-                    KeyCode::Down | KeyCode::Char('j') => app.daily_log_scroll_down(),
+                    KeyCode::Up | KeyCode::Char('k') => app.daily_log_cursor_up(),
+                    KeyCode::Down | KeyCode::Char('j') => app.daily_log_cursor_down(),
+                    KeyCode::Enter => app.daily_log_toggle_expand(),
                     KeyCode::Char('q') => app.request_quit(),
                     _ => {}
                 },
