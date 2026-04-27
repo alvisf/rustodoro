@@ -11,6 +11,7 @@ const MAX_BREAK_SECS: u64 = 60 * SECONDS_PER_MINUTE;
 const MAX_SESSIONS: u32 = 10;
 const DISTRACTION_SECS: u64 = 300;
 const WRAP_UP_SECS: u64 = 300;
+const SLEEP_THRESHOLD_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -121,6 +122,7 @@ pub struct App {
     pub daily_log_cursor: usize,
     pub phase_start_wall_12h: String,
     overtime_notified: bool,
+    last_tick: Instant,
     last_date: String,
 }
 
@@ -201,6 +203,7 @@ impl App {
             daily_log_cursor: 0,
             phase_start_wall_12h: String::new(),
             overtime_notified: false,
+            last_tick: Instant::now(),
             last_date: String::new(),
         }
     }
@@ -310,6 +313,7 @@ impl App {
         self.paused = false;
         self.phase_start_wall = store::local_time_str();
         self.phase_start_wall_12h = store::local_time_12h();
+        self.last_tick = Instant::now();
         self.overtime_notified = false;
     }
 
@@ -365,9 +369,24 @@ impl App {
     }
 
     pub fn tick(&mut self) {
+        self.handle_sleep_gap();
         self.check_date_change();
         self.auto_complete_break();
         self.check_overtime_notification();
+    }
+
+    fn handle_sleep_gap(&mut self) {
+        let gap = self.last_tick.elapsed();
+        self.last_tick = Instant::now();
+
+        if gap.as_secs() < SLEEP_THRESHOLD_SECS {
+            return;
+        }
+
+        if self.is_in_active_work() && !self.paused {
+            self.pause_accumulated += gap.saturating_sub(Duration::from_secs(1));
+            self.finish_phase(Outcome::Completed);
+        }
     }
 
     fn check_date_change(&mut self) {
@@ -450,22 +469,11 @@ impl App {
         }
 
         let elapsed = self.elapsed_secs();
-        let overtime = elapsed.saturating_sub(self.phase_total_secs());
 
         self.record_and_log_work(elapsed, Outcome::Completed);
         self.advance_phase();
-
-        let can_skip = overtime / self.break_secs.max(1) > 0;
-        if can_skip && self.phase == Phase::Break {
-            self.advance_phase();
-            self.reset_timer();
-            if self.screen == Screen::Timer {
-                self.return_to_task_picker();
-            }
-        } else {
-            self.reset_timer();
-            self.notify_break_start();
-        }
+        self.reset_timer();
+        self.notify_break_start();
     }
 
     fn finish_phase(&mut self, outcome: Outcome) {
@@ -515,6 +523,7 @@ impl App {
         self.paused = false;
         self.overtime_notified = false;
         self.phase_start_wall = store::local_time_str();
+        self.last_tick = Instant::now();
         self.phase_start_wall_12h = store::local_time_12h();
     }
 
@@ -1585,5 +1594,65 @@ mod tests {
         app.rename_task();
         assert!(!app.renaming_task);
         assert_ne!(app.screen, Screen::TaskInput);
+    }
+
+    #[test]
+    fn test_sleep_during_work_switches_to_break() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.submit_task();
+        app.start_timer();
+        assert_eq!(app.phase, Phase::Work);
+        assert_eq!(app.session, 1);
+
+        app.last_tick = Instant::now() - Duration::from_secs(60);
+        app.tick();
+
+        assert!(matches!(app.phase, Phase::Break | Phase::LongBreak));
+        let work = app
+            .history
+            .iter()
+            .filter(|e| e.phase == Phase::Work)
+            .collect::<Vec<_>>();
+        assert_eq!(work.len(), 1);
+        assert!(work[0].elapsed_secs < 5);
+    }
+
+    #[test]
+    fn test_sleep_during_break_no_crash() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.submit_task();
+        app.start_timer();
+        app.skip_phase();
+        assert!(matches!(app.phase, Phase::Break | Phase::LongBreak));
+
+        app.last_tick = Instant::now() - Duration::from_secs(60);
+        app.tick();
+
+        // Break should remain or auto-complete — no panic
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn test_sleep_during_paused_work_no_transition() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.submit_task();
+        app.start_timer();
+        app.toggle_pause();
+        assert!(app.paused);
+
+        app.last_tick = Instant::now() - Duration::from_secs(60);
+        app.tick();
+
+        assert_eq!(app.phase, Phase::Work);
+        assert!(app.paused);
+    }
+
+    #[test]
+    fn test_normal_tick_no_sleep_detection() {
+        let mut app = App::with_config(25, 5, 15, 4);
+        app.submit_task();
+        app.start_timer();
+        app.tick();
+        assert_eq!(app.phase, Phase::Work);
     }
 }
