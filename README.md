@@ -1,8 +1,13 @@
 # rustodoro 🦀🍅
 
+[![Crates.io](https://img.shields.io/crates/v/rustodoro.svg)](https://crates.io/crates/rustodoro)
+[![Docs.rs](https://docs.rs/rustodoro/badge.svg)](https://docs.rs/rustodoro)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/alvisf/rustodoro/actions/workflows/rust.yml/badge.svg)](https://github.com/alvisf/rustodoro/actions/workflows/rust.yml)
+
 A terminal Pomodoro timer written in Rust. Keep focus without leaving the terminal — with automatic daily logs, a todo list, and native desktop notifications.
 
-![Timer screen](docs/timer-screen.png)
+![Timer screen](https://raw.githubusercontent.com/alvisf/rustodoro/main/docs/timer-screen.png)
 
 ## Features
 
@@ -20,16 +25,16 @@ A terminal Pomodoro timer written in Rust. Keep focus without leaving the termin
 
 ## Installation
 
-### Homebrew (planned)
-
-```sh
-brew install rustodoro
-```
-
 ### From crates.io
 
 ```sh
 cargo install rustodoro
+```
+
+### Homebrew (planned)
+
+```sh
+brew install rustodoro
 ```
 
 ### From source
