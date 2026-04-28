@@ -14,6 +14,9 @@ const SECONDS_PER_HOUR: u64 = 3600;
 const APP_DIR_NAME: &str = "rustodoro";
 const DEFAULT_LOG_SUBDIR: &str = "Documents/Notes/daily-logs";
 const TIME_SEPARATOR: &str = " \u{2013} ";
+const APP_ICON_FILENAME: &str = "icon.png";
+const NOTIFIER_BIN: &str = "terminal-notifier";
+const NOTIFIER_GROUP: &str = "pomodoro";
 
 /// Icon shipped with the binary and extracted to the user's cache dir
 /// on first use, so `terminal-notifier` has a stable file path.
@@ -120,7 +123,7 @@ fn log_dir() -> PathBuf {
 }
 
 /// Cache dir for transient app data (extracted icon, etc).
-/// Falls back to config dir if XDG_CACHE_HOME / ~/.cache is unavailable.
+/// Respects `$XDG_CACHE_HOME`, falls back to `~/.cache/`.
 fn cache_dir() -> PathBuf {
     let base = env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
@@ -128,17 +131,23 @@ fn cache_dir() -> PathBuf {
     base.join(APP_DIR_NAME)
 }
 
-/// Returns the path to the extracted app icon, or None if extraction failed.
-/// The icon is written once per install on first call, then reused.
-fn icon_path() -> Option<PathBuf> {
-    let dir = cache_dir();
-    let path = dir.join("icon.png");
+/// Writes the bundled icon to the cache dir if it isn't there yet.
+/// Returns the path, or None if extraction failed (e.g. read-only fs).
+fn extract_app_icon() -> Option<PathBuf> {
+    let path = cache_dir().join(APP_ICON_FILENAME);
     if path.exists() {
         return Some(path);
     }
-    fs::create_dir_all(&dir).ok()?;
+    fs::create_dir_all(path.parent()?).ok()?;
     fs::write(&path, APP_ICON_BYTES).ok()?;
     Some(path)
+}
+
+/// Returns the extracted icon path, extracting once per process.
+/// None means the icon is unavailable and notifications should skip `-appIcon`.
+fn app_icon_path() -> Option<&'static Path> {
+    static ICON: OnceLock<Option<PathBuf>> = OnceLock::new();
+    ICON.get_or_init(extract_app_icon).as_deref()
 }
 
 /// Expands a leading `~` to the user's home directory.
@@ -427,7 +436,13 @@ pub fn save_todos(todos: &[TodoItem]) -> io::Result<()> {
 // -- Desktop notification --
 
 pub fn send_notification(title: &str, message: &str) {
-    let mut cmd = Command::new("terminal-notifier");
+    let mut cmd = Command::new(NOTIFIER_BIN);
+    add_notifier_args(&mut cmd, title, message);
+    add_icon_arg_if_available(&mut cmd);
+    spawn_detached(cmd);
+}
+
+fn add_notifier_args(cmd: &mut Command, title: &str, message: &str) {
     cmd.args([
         "-title",
         title,
@@ -436,15 +451,21 @@ pub fn send_notification(title: &str, message: &str) {
         "-sound",
         "default",
         "-group",
-        "pomodoro",
+        NOTIFIER_GROUP,
     ]);
-    if let Some(icon) = icon_path() {
+}
+
+fn add_icon_arg_if_available(cmd: &mut Command) {
+    if let Some(icon) = app_icon_path() {
         cmd.args(["-appIcon", &icon.to_string_lossy()]);
     }
-    cmd.stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok();
+}
+
+/// Spawns a child process without inheriting stdio or waiting for it.
+/// Failure (binary missing, permission denied) is silently ignored —
+/// notifications are best-effort.
+fn spawn_detached(mut cmd: Command) {
+    cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn().ok();
 }
 
 // -- Stats aggregation --
