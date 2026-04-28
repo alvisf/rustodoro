@@ -13,8 +13,11 @@ const SECONDS_PER_HOUR: u64 = 3600;
 
 const APP_DIR_NAME: &str = "rustodoro";
 const DEFAULT_LOG_SUBDIR: &str = "Documents/Notes/daily-logs";
-const ICON_SUBPATH: &str = "Documents/pomodoro_timer_icon.png";
 const TIME_SEPARATOR: &str = " \u{2013} ";
+
+/// Icon shipped with the binary and extracted to the user's cache dir
+/// on first use, so `terminal-notifier` has a stable file path.
+const APP_ICON_BYTES: &[u8] = include_bytes!("../assets/icon.png");
 
 #[derive(Debug, Default, Clone)]
 pub struct DayStats {
@@ -116,8 +119,26 @@ fn log_dir() -> PathBuf {
         .clone()
 }
 
-fn icon_path() -> PathBuf {
-    home_dir().join(ICON_SUBPATH)
+/// Cache dir for transient app data (extracted icon, etc).
+/// Falls back to config dir if XDG_CACHE_HOME / ~/.cache is unavailable.
+fn cache_dir() -> PathBuf {
+    let base = env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".cache"));
+    base.join(APP_DIR_NAME)
+}
+
+/// Returns the path to the extracted app icon, or None if extraction failed.
+/// The icon is written once per install on first call, then reused.
+fn icon_path() -> Option<PathBuf> {
+    let dir = cache_dir();
+    let path = dir.join("icon.png");
+    if path.exists() {
+        return Some(path);
+    }
+    fs::create_dir_all(&dir).ok()?;
+    fs::write(&path, APP_ICON_BYTES).ok()?;
+    Some(path)
 }
 
 /// Expands a leading `~` to the user's home directory.
@@ -406,21 +427,21 @@ pub fn save_todos(todos: &[TodoItem]) -> io::Result<()> {
 // -- Desktop notification --
 
 pub fn send_notification(title: &str, message: &str) {
-    let icon = icon_path();
-    Command::new("terminal-notifier")
-        .args([
-            "-title",
-            title,
-            "-message",
-            message,
-            "-appIcon",
-            &icon.to_string_lossy(),
-            "-sound",
-            "default",
-            "-group",
-            "pomodoro",
-        ])
-        .stdout(Stdio::null())
+    let mut cmd = Command::new("terminal-notifier");
+    cmd.args([
+        "-title",
+        title,
+        "-message",
+        message,
+        "-sound",
+        "default",
+        "-group",
+        "pomodoro",
+    ]);
+    if let Some(icon) = icon_path() {
+        cmd.args(["-appIcon", &icon.to_string_lossy()]);
+    }
+    cmd.stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .ok();
