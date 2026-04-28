@@ -1,13 +1,20 @@
 use std::collections::BTreeMap;
+use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::BufRead;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
 const SECONDS_PER_DAY: i64 = 86_400;
 const SECONDS_PER_HOUR: u64 = 3600;
+
+const APP_DIR_NAME: &str = "rustodoro";
+const DEFAULT_LOG_SUBDIR: &str = "Documents/Notes/daily-logs";
+const ICON_SUBPATH: &str = "Documents/pomodoro_timer_icon.png";
+const TIME_SEPARATOR: &str = " \u{2013} ";
 
 #[derive(Debug, Default, Clone)]
 pub struct DayStats {
@@ -32,15 +39,103 @@ pub struct DayEntry {
     pub notes: String,
 }
 
-const LOG_DIR: &str = "/Users/alvisf/Documents/Notes/daily-logs";
+pub struct WorkEntry<'a> {
+    pub date: &'a str,
+    pub start_time: &'a str,
+    pub end_time: &'a str,
+    pub duration_secs: u64,
+    pub task: &'a str,
+    pub completed: bool,
+    pub helping: bool,
+    pub notes: &'a str,
+}
 
-fn config_path() -> PathBuf {
-    log_dir().join(".pomodoro.conf")
+pub struct Config {
+    pub work_secs: u64,
+    pub break_secs: u64,
+    pub long_break_secs: u64,
+    pub sessions_before_long: u32,
+    pub log_dir: PathBuf,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            work_secs: 25 * 60,
+            break_secs: 5 * 60,
+            long_break_secs: 15 * 60,
+            sessions_before_long: 4,
+            log_dir: default_log_dir(),
+        }
+    }
+}
+
+// -- Paths --
+
+fn home_dir() -> PathBuf {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// `~/.config/rustodoro/` (or `$XDG_CONFIG_HOME/rustodoro/`).
+fn config_dir() -> PathBuf {
+    let base = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".config"));
+    base.join(APP_DIR_NAME)
+}
+
+pub fn config_path() -> PathBuf {
+    config_dir().join("config")
+}
+
+pub fn default_log_dir() -> PathBuf {
+    home_dir().join(DEFAULT_LOG_SUBDIR)
+}
+
+pub fn config_exists() -> bool {
+    config_path().exists()
+}
+
+/// Process-wide active log dir. Set from config (or onboarding) and read by
+/// all persistence functions.
+fn log_dir_cell() -> &'static Mutex<PathBuf> {
+    static CELL: OnceLock<Mutex<PathBuf>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(default_log_dir()))
+}
+
+pub fn set_log_dir(path: PathBuf) {
+    *log_dir_cell().lock().expect("log_dir mutex poisoned") = path;
 }
 
 fn log_dir() -> PathBuf {
-    PathBuf::from(LOG_DIR)
+    log_dir_cell()
+        .lock()
+        .expect("log_dir mutex poisoned")
+        .clone()
 }
+
+fn icon_path() -> PathBuf {
+    home_dir().join(ICON_SUBPATH)
+}
+
+/// Expands a leading `~` to the user's home directory.
+pub fn expand_home(input: &str) -> PathBuf {
+    if let Some(rest) = input.strip_prefix("~/") {
+        home_dir().join(rest)
+    } else if input == "~" {
+        home_dir()
+    } else {
+        PathBuf::from(input)
+    }
+}
+
+pub fn ensure_dir(path: &Path) -> io::Result<()> {
+    fs::create_dir_all(path)
+}
+
+// -- Time formatting --
 
 fn unix_now() -> u64 {
     SystemTime::now()
@@ -116,6 +211,8 @@ fn format_mmss(secs: u64) -> String {
     format!("{m:02}:{s:02}")
 }
 
+// -- Quarterly filename helpers --
+
 fn quarter_for_month(month: u32) -> u32 {
     (month - 1) / 3 + 1
 }
@@ -138,24 +235,27 @@ fn quarterly_title(date: &str) -> String {
     format!("{year} Q{}", quarter_for_month(month))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn save_work_entry_md(
-    date: &str,
-    start_time: &str,
-    end_time: &str,
-    duration_secs: u64,
-    task: &str,
-    completed: bool,
-    helping: bool,
-    notes: &str,
-) -> io::Result<()> {
+fn is_quarterly_filename(stem: &str) -> bool {
+    stem.len() == 7
+        && stem.as_bytes()[4] == b'-'
+        && stem.as_bytes()[5] == b'Q'
+        && matches!(stem.as_bytes()[6], b'1'..=b'4')
+}
+
+fn is_daily_filename(stem: &str) -> bool {
+    stem.len() == 10 && stem.as_bytes()[4] == b'-' && stem.as_bytes()[7] == b'-'
+}
+
+// -- Saving work entries --
+
+pub fn save_work_entry_md(entry: &WorkEntry) -> io::Result<()> {
     let dir = log_dir();
     fs::create_dir_all(&dir)?;
 
-    let path = dir.join(quarterly_filename(date));
+    let path = dir.join(quarterly_filename(entry.date));
     let is_new = !path.exists();
 
-    let date_header = format!("## {date}");
+    let date_header = format!("## {}", entry.date);
     let needs_date_header = if is_new {
         true
     } else {
@@ -166,53 +266,42 @@ pub fn save_work_entry_md(
     let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
 
     if is_new {
-        writeln!(file, "# {}\n", quarterly_title(date))?;
+        writeln!(file, "# {}\n", quarterly_title(entry.date))?;
     }
 
     if needs_date_header {
         writeln!(file, "\n{date_header}\n")?;
     }
 
-    let duration = format_mmss(duration_secs);
-    let mark = if helping {
+    let duration = format_mmss(entry.duration_secs);
+    let mark = if entry.helping {
         "[h]"
-    } else if completed {
+    } else if entry.completed {
         "[x]"
     } else {
         "[ ]"
     };
 
-    if task.is_empty() {
-        writeln!(file, "- {mark} {start_time} – {end_time} ({duration})")?;
+    if entry.task.is_empty() {
+        writeln!(
+            file,
+            "- {mark} {} – {} ({duration})",
+            entry.start_time, entry.end_time
+        )?;
     } else {
         writeln!(
             file,
-            "- {mark} {start_time} – {end_time} ({duration}) {task}"
+            "- {mark} {} – {} ({duration}) {}",
+            entry.start_time, entry.end_time, entry.task
         )?;
     }
-    if !notes.is_empty() {
-        writeln!(file, "  > {notes}")?;
+    if !entry.notes.is_empty() {
+        writeln!(file, "  > {}", entry.notes)?;
     }
     Ok(())
 }
 
-pub struct Config {
-    pub work_secs: u64,
-    pub break_secs: u64,
-    pub long_break_secs: u64,
-    pub sessions_before_long: u32,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            work_secs: 25 * 60,
-            break_secs: 5 * 60,
-            long_break_secs: 15 * 60,
-            sessions_before_long: 4,
-        }
-    }
-}
+// -- Config load/save --
 
 pub fn load_config() -> Config {
     let path = config_path();
@@ -225,26 +314,31 @@ pub fn load_config() -> Config {
         let Some((key, val)) = line.split_once('=') else {
             continue;
         };
-        match key.trim() {
+        let key = key.trim();
+        let val = val.trim();
+        match key {
             "work_secs" => {
-                if let Ok(v) = val.trim().parse() {
+                if let Ok(v) = val.parse() {
                     cfg.work_secs = v;
                 }
             }
             "break_secs" => {
-                if let Ok(v) = val.trim().parse() {
+                if let Ok(v) = val.parse() {
                     cfg.break_secs = v;
                 }
             }
             "long_break_secs" => {
-                if let Ok(v) = val.trim().parse() {
+                if let Ok(v) = val.parse() {
                     cfg.long_break_secs = v;
                 }
             }
             "sessions_before_long" => {
-                if let Ok(v) = val.trim().parse() {
+                if let Ok(v) = val.parse() {
                     cfg.sessions_before_long = v;
                 }
+            }
+            "log_dir" => {
+                cfg.log_dir = expand_home(val);
             }
             _ => {}
         }
@@ -252,20 +346,23 @@ pub fn load_config() -> Config {
     cfg
 }
 
-pub fn save_config(
-    work_secs: u64,
-    break_secs: u64,
-    long_break_secs: u64,
-    sessions_before_long: u32,
-) -> io::Result<()> {
-    let dir = log_dir();
+pub fn save_config(cfg: &Config) -> io::Result<()> {
+    let dir = config_dir();
     fs::create_dir_all(&dir)?;
     let contents = format!(
-        "work_secs={work_secs}\nbreak_secs={break_secs}\n\
-         long_break_secs={long_break_secs}\nsessions_before_long={sessions_before_long}\n"
+        "work_secs={}\nbreak_secs={}\n\
+         long_break_secs={}\nsessions_before_long={}\n\
+         log_dir={}\n",
+        cfg.work_secs,
+        cfg.break_secs,
+        cfg.long_break_secs,
+        cfg.sessions_before_long,
+        cfg.log_dir.display(),
     );
     fs::write(config_path(), contents)
 }
+
+// -- Todos --
 
 fn todo_path() -> PathBuf {
     log_dir().join(".pomodoro_todos")
@@ -306,7 +403,10 @@ pub fn save_todos(todos: &[TodoItem]) -> io::Result<()> {
     fs::write(todo_path(), content)
 }
 
+// -- Desktop notification --
+
 pub fn send_notification(title: &str, message: &str) {
+    let icon = icon_path();
     Command::new("terminal-notifier")
         .args([
             "-title",
@@ -314,7 +414,7 @@ pub fn send_notification(title: &str, message: &str) {
             "-message",
             message,
             "-appIcon",
-            "/Users/alvisf/Documents/pomodoro_timer_icon.png",
+            &icon.to_string_lossy(),
             "-sound",
             "default",
             "-group",
@@ -325,6 +425,8 @@ pub fn send_notification(title: &str, message: &str) {
         .spawn()
         .ok();
 }
+
+// -- Stats aggregation --
 
 pub fn load_daily_stats() -> BTreeMap<String, DayStats> {
     let dir = log_dir();
@@ -357,17 +459,6 @@ pub fn load_daily_stats() -> BTreeMap<String, DayStats> {
     }
 
     stats
-}
-
-fn is_quarterly_filename(stem: &str) -> bool {
-    stem.len() == 7
-        && stem.as_bytes()[4] == b'-'
-        && stem.as_bytes()[5] == b'Q'
-        && matches!(stem.as_bytes()[6], b'1'..=b'4')
-}
-
-fn is_daily_filename(stem: &str) -> bool {
-    stem.len() == 10 && stem.as_bytes()[4] == b'-' && stem.as_bytes()[7] == b'-'
 }
 
 fn parse_quarterly_file(contents: &str, stats: &mut BTreeMap<String, DayStats>) {
@@ -422,8 +513,6 @@ fn parse_entry_duration(line: &str) -> Option<u64> {
     let end = line.find(')')?;
     parse_mmss(&line[start + 1..end])
 }
-
-const TIME_SEPARATOR: &str = " \u{2013} ";
 
 fn parse_entry_detail(line: &str) -> Option<DayEntry> {
     let stripped = line.strip_prefix("- ")?;
@@ -596,7 +685,6 @@ mod tests {
             Some(1500)
         );
         assert_eq!(parse_entry_duration("[ ] 10:00 – 10:05 (05:30)"), Some(330));
-        // Old emoji format still parses
         assert_eq!(
             parse_entry_duration("09:15 – 09:40 (25:00) ✅ task"),
             Some(1500)
@@ -789,5 +877,17 @@ mod tests {
         let apr10 = &entries["2026-04-10"];
         assert_eq!(apr10.len(), 1);
         assert_eq!(apr10[0].duration_secs, 1800);
+    }
+
+    #[test]
+    fn test_expand_home_tilde_prefix() {
+        let expanded = expand_home("~/foo/bar");
+        assert!(expanded.is_absolute());
+        assert!(expanded.ends_with("foo/bar"));
+    }
+
+    #[test]
+    fn test_expand_home_no_tilde() {
+        assert_eq!(expand_home("/abs/path"), PathBuf::from("/abs/path"));
     }
 }

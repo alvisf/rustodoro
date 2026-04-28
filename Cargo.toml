@@ -1,9 +1,34 @@
 [package]
-name = "pomodoro_timer"
+name = "rustodoro"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+authors = ["Alvis Felix <alvisf0731@gmail.com>"]
+description = "A terminal Pomodoro timer written in Rust, with task tracking, daily logs, and manual breaks"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/alvisfelix/rustodoro"
+homepage = "https://github.com/alvisfelix/rustodoro"
+documentation = "https://github.com/alvisfelix/rustodoro#readme"
+keywords = ["pomodoro", "timer", "tui", "productivity", "terminal"]
+categories = ["command-line-utilities"]
+exclude = [
+    "/docs/*",
+    "/.github/*",
+    "/wasabi-toolbag",
+    "/.DS_Store",
+]
+
+[[bin]]
+name = "rustodoro"
+path = "src/main.rs"
 
 [dependencies]
 crossterm = "0.28"
 libc = "0.2"
 ratatui = "0.28"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

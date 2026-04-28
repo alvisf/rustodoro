@@ -22,6 +22,7 @@ fn phase_color(phase: Phase) -> Color {
 
 pub fn draw(frame: &mut Frame, app: &App) {
     match app.screen {
+        Screen::Onboarding => draw_onboarding(frame, app),
         Screen::Setup => draw_setup(frame, app),
         Screen::TaskInput => draw_task_input(frame, app),
         Screen::TodoList => draw_todo_list(frame, app),
@@ -33,6 +34,70 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if app.confirm_quit {
         draw_quit_dialog(frame, app);
     }
+}
+
+// ── Onboarding screen ────────────────────────────────────
+
+fn draw_onboarding(frame: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(3)])
+        .split(frame.area());
+
+    let block = Block::default()
+        .title(" 🍅 Welcome to rustodoro ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+    let inner = block.inner(chunks[0]);
+    frame.render_widget(block, chunks[0]);
+
+    let bold_white = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(Color::DarkGray);
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Where should daily logs be saved?",
+            bold_white,
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Your pomodoro sessions will be appended to quarterly markdown files",
+            dim,
+        )),
+        Line::from(Span::styled(
+            "in this directory. You can change it later by editing the config.",
+            dim,
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("> {}▏", app.onboarding.input_buffer),
+            Style::default().fg(Color::Yellow),
+        )),
+    ];
+
+    if let Some(err) = &app.onboarding.error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("⚠ {err}"),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    let para = Paragraph::new(lines).alignment(Alignment::Center);
+    frame.render_widget(para, inner);
+
+    draw_controls(
+        frame,
+        chunks[1],
+        &[
+            ("Enter", "confirm"),
+            ("Ctrl+R", "use default"),
+            ("Esc", "quit"),
+        ],
+    );
 }
 
 // ── Setup screen ──────────────────────────────────────────
@@ -75,7 +140,7 @@ fn draw_setup(frame: &mut Frame, app: &App) {
     lines.push(Line::from(""));
 
     for (i, (label, value, unit)) in fields.iter().enumerate() {
-        let selected = i == app.selected_field;
+        let selected = i == app.selected_field.index();
         let marker = if selected { "▸ " } else { "  " };
         let style = if selected {
             Style::default()
@@ -167,7 +232,7 @@ fn draw_todo_list(frame: &mut Frame, app: &App) {
         .constraints([Constraint::Min(1), Constraint::Length(3)])
         .split(frame.area());
 
-    let title = if app.todo_picking {
+    let title = if app.todo.picking {
         " 📝 Pick a task "
     } else {
         " 📝 Todo List "
@@ -180,7 +245,7 @@ fn draw_todo_list(frame: &mut Frame, app: &App) {
     let inner = block.inner(chunks[0]);
     frame.render_widget(block, chunks[0]);
 
-    match app.todo_mode {
+    match app.todo.mode {
         TodoMode::Adding | TodoMode::Editing(_) => {
             draw_todo_input(frame, inner, app);
         }
@@ -191,7 +256,7 @@ fn draw_todo_list(frame: &mut Frame, app: &App) {
 
     let controls: Vec<(&str, &str)> = if app.todo_is_input_mode() {
         vec![("Enter", "save"), ("Esc", "cancel")]
-    } else if app.todo_picking {
+    } else if app.todo.picking {
         vec![
             ("↑↓", "nav"),
             ("Enter", "start"),
@@ -220,8 +285,8 @@ fn draw_todo_list(frame: &mut Frame, app: &App) {
 }
 
 fn draw_todo_normal(frame: &mut Frame, area: Rect, app: &App) {
-    if app.todos.is_empty() {
-        let msg = if app.todo_picking {
+    if app.todo.items.is_empty() {
+        let msg = if app.todo.picking {
             "No todos yet. Press 'a' to add or 'n' for a custom task."
         } else {
             "No todos yet. Press 'a' to add one."
@@ -241,11 +306,12 @@ fn draw_todo_normal(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let items: Vec<ListItem> = app
-        .todos
+        .todo
+        .items
         .iter()
         .enumerate()
         .map(|(i, todo)| {
-            let selected = i == app.todo_cursor;
+            let selected = i == app.todo.cursor;
             let marker = if selected { "▸ " } else { "  " };
             let check = if todo.done { "[x]" } else { "[ ]" };
             let style = if todo.done {
@@ -269,7 +335,7 @@ fn draw_todo_normal(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_todo_input(frame: &mut Frame, area: Rect, app: &App) {
-    let label = match app.todo_mode {
+    let label = match app.todo.mode {
         TodoMode::Adding => "Add todo:",
         TodoMode::Editing(_) => "Edit todo:",
         _ => "",
@@ -288,7 +354,7 @@ fn draw_todo_input(frame: &mut Frame, area: Rect, app: &App) {
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        format!("> {}▏", app.todo_input_buffer),
+        format!("> {}▏", app.todo.input_buffer),
         Style::default().fg(Color::Yellow),
     )));
 
@@ -329,7 +395,7 @@ fn draw_notes_input(frame: &mut Frame, app: &App) {
     }
 
     lines.push(Line::from(Span::styled(
-        if app.pending_is_helping {
+        if app.pending.is_helping {
             "Who/what were you helping with?"
         } else {
             "Any notes on this task?"
@@ -735,7 +801,7 @@ fn draw_daily_log(frame: &mut Frame, app: &App) {
     lines.push(Line::default());
 
     // ── Today's entries (from file) ──
-    let today_entries = app.daily_log_entries.get(&today);
+    let today_entries = app.daily_log.entries.get(&today);
     let has_active = app.phase == Phase::Work && !app.manual_break;
     let has_file_entries = today_entries.is_some_and(|e| !e.is_empty());
 
@@ -777,10 +843,11 @@ fn draw_daily_log(frame: &mut Frame, app: &App) {
         )));
 
         for (idx, (date, stats)) in past_days.iter().enumerate() {
-            let is_cursor = idx == app.daily_log_cursor;
-            let is_expanded = app.daily_log_expanded.contains(date);
+            let is_cursor = idx == app.daily_log.cursor;
+            let is_expanded = app.daily_log.expanded.contains(date);
             let has_entries = app
-                .daily_log_entries
+                .daily_log
+                .entries
                 .get(*date)
                 .is_some_and(|e| !e.is_empty());
 
@@ -833,7 +900,7 @@ fn draw_daily_log(frame: &mut Frame, app: &App) {
             lines.push(Line::from(spans));
 
             if is_expanded {
-                if let Some(entries) = app.daily_log_entries.get(*date) {
+                if let Some(entries) = app.daily_log.entries.get(*date) {
                     for entry in entries {
                         lines.push(build_file_entry_line(entry, "    "));
                         if !entry.notes.is_empty() {
@@ -913,7 +980,7 @@ fn build_notes_line(notes: &str, indent: &str) -> Line<'static> {
 
 fn build_active_session_line(app: &App) -> Line<'static> {
     let elapsed = app.elapsed_secs();
-    let start = &app.phase_start_wall_12h;
+    let start = &app.timer.phase_start_wall_12h;
     let time_display = if start.is_empty() {
         "... \u{2013} ...".to_string()
     } else {
