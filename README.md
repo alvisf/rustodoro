@@ -37,7 +37,7 @@ cargo install rustodoro
 Requires Rust 1.85+ (2024 edition).
 
 ```sh
-git clone https://github.com/alvisfelix/rustodoro.git
+git clone https://github.com/alvisf/rustodoro.git
 cd rustodoro
 cargo install --path .
 ```
