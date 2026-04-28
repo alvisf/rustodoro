@@ -56,13 +56,28 @@ cd rustodoro
 cargo install --path .
 ```
 
-### Optional: desktop notifications on macOS
+### Optional: desktop notifications
+
+**macOS:**
 
 ```sh
 brew install terminal-notifier
 ```
 
-Without `terminal-notifier`, the timer still works — you just won't get system notifications.
+**Linux:** uses `notify-send` from `libnotify`, pre-installed on most desktops. Install with your distro's package manager if missing:
+
+```sh
+# Debian / Ubuntu
+sudo apt install libnotify-bin
+
+# Fedora
+sudo dnf install libnotify
+
+# Arch
+sudo pacman -S libnotify
+```
+
+Without a notifier, the timer still works — you just won't get system notifications.
 
 ## First run
 
@@ -197,7 +212,6 @@ cargo clippy
 ## Roadmap
 
 - [ ] `--reconfigure` CLI flag
-- [ ] Linux notification support
 - [ ] Weekly / monthly summaries
 - [ ] Export to CSV / JSON
 
