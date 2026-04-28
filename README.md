@@ -31,9 +31,18 @@ A terminal Pomodoro timer written in Rust. Keep focus without leaving the termin
 cargo install rustodoro
 ```
 
-### Homebrew (planned)
+### Homebrew (macOS)
+
+Ships as a pre-built binary — no Rust toolchain required.
 
 ```sh
+brew install alvisf/tap/rustodoro
+```
+
+Or tap once, then install:
+
+```sh
+brew tap alvisf/tap
 brew install rustodoro
 ```
 
