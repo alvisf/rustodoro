@@ -15,7 +15,8 @@ const APP_DIR_NAME: &str = "rustodoro";
 const DEFAULT_LOG_SUBDIR: &str = "Documents/Notes/daily-logs";
 const TIME_SEPARATOR: &str = " \u{2013} ";
 const APP_ICON_FILENAME: &str = "icon.png";
-const NOTIFIER_BIN: &str = "terminal-notifier";
+
+#[cfg(target_os = "macos")]
 const NOTIFIER_GROUP: &str = "pomodoro";
 
 /// Icon shipped with the binary and extracted to the user's cache dir
@@ -434,15 +435,20 @@ pub fn save_todos(todos: &[TodoItem]) -> io::Result<()> {
 }
 
 // -- Desktop notification --
+//
+// Notifications are best-effort — if the platform notifier isn't
+// installed, the spawn fails silently and the timer keeps running.
+//
+// macOS:  terminal-notifier  (brew install terminal-notifier)
+// Linux:  notify-send         (part of libnotify; pre-installed on most distros)
 
 pub fn send_notification(title: &str, message: &str) {
-    let mut cmd = Command::new(NOTIFIER_BIN);
-    add_notifier_args(&mut cmd, title, message);
-    add_icon_arg_if_available(&mut cmd);
-    spawn_detached(cmd);
+    spawn_detached(build_notification_command(title, message));
 }
 
-fn add_notifier_args(cmd: &mut Command, title: &str, message: &str) {
+#[cfg(target_os = "macos")]
+fn build_notification_command(title: &str, message: &str) -> Command {
+    let mut cmd = Command::new("terminal-notifier");
     cmd.args([
         "-title",
         title,
@@ -453,12 +459,28 @@ fn add_notifier_args(cmd: &mut Command, title: &str, message: &str) {
         "-group",
         NOTIFIER_GROUP,
     ]);
-}
-
-fn add_icon_arg_if_available(cmd: &mut Command) {
     if let Some(icon) = app_icon_path() {
         cmd.args(["-appIcon", &icon.to_string_lossy()]);
     }
+    cmd
+}
+
+#[cfg(target_os = "linux")]
+fn build_notification_command(title: &str, message: &str) -> Command {
+    let mut cmd = Command::new("notify-send");
+    cmd.args(["--app-name=rustodoro", "--category=pomodoro"]);
+    if let Some(icon) = app_icon_path() {
+        cmd.arg(format!("--icon={}", icon.to_string_lossy()));
+    }
+    cmd.args([title, message]);
+    cmd
+}
+
+/// Platform with no known notifier — build a command that will fail to spawn
+/// so the rest of the pipeline stays identical.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn build_notification_command(_title: &str, _message: &str) -> Command {
+    Command::new("true")
 }
 
 /// Spawns a child process without inheriting stdio or waiting for it.
